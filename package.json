@@ -1,0 +1,27 @@
+{
+  "name": "restaurant-platform",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Multi-tenant, white-label restaurant management platform (monorepo root).",
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=24.11.0 <27"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "build": "pnpm -r --if-present run build",
+    "test": "pnpm -r --if-present run test",
+    "check:brand": "sh scripts/check-brand-leak.sh",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.14.0",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0"
+  }
+}

@@ -1,0 +1,7 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Only allow install scripts from packages we have explicitly reviewed.
+# Add entries deliberately (e.g. native argon2 bindings) when they are introduced.
+onlyBuiltDependencies: []

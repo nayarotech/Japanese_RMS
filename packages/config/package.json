@@ -1,0 +1,17 @@
+{
+  "name": "@restaurant-platform/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed, validated runtime configuration loaded from environment variables (api and worker).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  }
+}

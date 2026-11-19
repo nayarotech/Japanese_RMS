@@ -1,0 +1,11 @@
+{
+  "name": "@restaurant-platform/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Background worker: outbox relay, durable jobs, scheduled tasks.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  }
+}

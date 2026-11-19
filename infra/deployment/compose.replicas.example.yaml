@@ -1,0 +1,66 @@
+# REFERENCE ONLY. Shows that scaling is configuration: the same images, more replicas,
+# external managed PostgreSQL/Redis, all settings from environment. Not used to deploy anything.
+#
+#   docker compose -f infra/deployment/compose.replicas.example.yaml config   # validate only
+
+services:
+  api:
+    image: ${REGISTRY:-registry.example.invalid}/restaurant-platform/api:${IMAGE_TAG:-sha-placeholder}
+    init: true
+    environment:
+      APP_ENV: production
+      INSTANCE_NAME: "{{.Task.Slot}}" # orchestrator-provided; informational only
+      POSTGRES_HOST: ${POSTGRES_HOST:-managed-postgres.internal.invalid}
+      DATABASE_SSL_MODE: verify-full
+      DATABASE_POOL_MAX: "15" # 6 replicas x 15 = 90 connections; size against DB max_connections
+      REDIS_URL: ${REDIS_URL:-rediss://managed-redis.internal.invalid:6379}
+      REDIS_TLS: "true"
+      COOKIE_SECURE: "true"
+      LOG_PRETTY: "false"
+      # Secrets (DATABASE_APP_PASSWORD, REDIS_PASSWORD, SESSION_SECRET) are injected by the secret manager.
+    deploy:
+      replicas: 6
+      update_config: { order: start-first, parallelism: 1 }
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  worker:
+    image: ${REGISTRY:-registry.example.invalid}/restaurant-platform/worker:${IMAGE_TAG:-sha-placeholder}
+    init: true
+    environment:
+      APP_ENV: production
+      POSTGRES_HOST: ${POSTGRES_HOST:-managed-postgres.internal.invalid}
+      DATABASE_SSL_MODE: verify-full
+      DATABASE_POOL_MAX: "5"
+      REDIS_URL: ${REDIS_URL:-rediss://managed-redis.internal.invalid:6379}
+      REDIS_TLS: "true"
+      LOG_PRETTY: "false"
+    deploy:
+      replicas: 2
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  web:
+    image: ${REGISTRY:-registry.example.invalid}/restaurant-platform/web:${IMAGE_TAG:-sha-placeholder}
+    init: true
+    environment:
+      WEB_INTERNAL_API_URL: http://api:4000
+    deploy:
+      replicas: 3
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  # One-off migration task (run before rolling out api/worker). Uses the MIGRATOR credential.
+  migrate:
+    image: ${REGISTRY:-registry.example.invalid}/restaurant-platform/api:${IMAGE_TAG:-sha-placeholder}
+    command: ["node", "dist/migrate.js"] # planned entrypoint, not yet implemented
+    profiles: [migrate]
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-managed-postgres.internal.invalid}
+      DATABASE_SSL_MODE: verify-full

@@ -1,0 +1,10 @@
+{
+  "name": "@restaurant-platform/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Next.js (App Router) frontend: platform admin, restaurant admin, POS, QR and online ordering.",
+  "scripts": {
+    "typecheck": "echo \"web: Next.js is not installed yet (Phase 0); nothing to typecheck.\""
+  }
+}
