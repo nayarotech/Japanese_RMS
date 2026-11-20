@@ -5,7 +5,48 @@
   "type": "module",
   "description": "HTTP API and Socket.IO server (Express, modular monolith).",
   "scripts": {
+    "dev": "tsx watch --conditions=development --env-file=../../.env src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "test": "vitest run",
+    "db:migrate": "tsx --conditions=development --env-file=../../.env src/infrastructure/database/migrate-cli.ts",
+    "db:seed": "tsx --conditions=development --env-file=../../.env src/infrastructure/database/seed-dev.ts",
+    "db:reset": "tsx --conditions=development --env-file=../../.env src/infrastructure/database/reset-dev.ts"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "2.2.2",
+    "@restaurant-platform/config": "workspace:*",
+    "@restaurant-platform/contracts": "workspace:*",
+    "@socket.io/redis-adapter": "8.3.0",
+    "cookie": "2.0.2",
+    "express": "5.3.0",
+    "helmet": "8.3.0",
+    "ioredis": "6.0.0",
+    "kysely": "0.29.8",
+    "pg": "8.23.1",
+    "pino": "10.4.0",
+    "rate-limiter-flexible": "11.3.0",
+    "socket.io": "4.8.4",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@socket.io/redis-emitter": "5.1.0",
+    "@types/express": "5.0.6",
+    "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
+    "@types/supertest": "7.2.1",
+    "pino-pretty": "13.2.0",
+    "socket.io-client": "4.8.4",
+    "supertest": "7.3.1",
+    "tsx": "4.23.15",
+    "vitest": "5.1.0"
+  },
+  "exports": {
+    "./worker": {
+      "types": "./src/worker-entry.ts",
+      "development": "./src/worker-entry.ts",
+      "default": "./dist/worker-entry.js"
+    }
   }
 }

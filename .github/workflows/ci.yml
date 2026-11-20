@@ -1,6 +1,4 @@
-# Continuous integration. No deployment, no credentials.
-# Planned additions (Phase 1+, see docs/operations/README.md): PostgreSQL/Redis service containers for
-# integration + cross-tenant security tests, image builds with Trivy scanning, SBOM, CodeQL, staging deploy.
+# Continuous integration. No deployment, no credentials (all values below are throwaway CI-only test values).
 name: CI
 
 on:
@@ -17,9 +15,40 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint, typecheck, test
+    name: Lint, typecheck, unit + integration tests, build
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-superuser
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      APP_ENV: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: restaurant_platform
+      POSTGRES_SUPERUSER: postgres
+      POSTGRES_SUPERUSER_PASSWORD: ci-only-superuser
+      DATABASE_MIGRATOR_USER: rp_migrator
+      DATABASE_MIGRATOR_PASSWORD: ci-only-migrator
+      DATABASE_APP_USER: rp_app
+      DATABASE_APP_PASSWORD: ci-only-app
+      DATABASE_RELAY_USER: rp_relay
+      DATABASE_RELAY_PASSWORD: ci-only-relay
+      REDIS_URL: redis://localhost:6379
+      SESSION_SECRET: ci-only-session-secret-not-used-anywhere-else-000
+      COOKIE_SECURE: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -31,11 +60,13 @@ jobs:
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test
+      - run: pnpm --filter @restaurant-platform/web check:i18n
+      - name: Tests (unit + PostgreSQL/Redis integration, security, concurrency, WebSocket)
+        run: pnpm test
+      - run: pnpm build
       - name: White-label brand leak check
         run: pnpm check:brand
         env:
-          # Repository variable (Settings > Variables). Comma-separated terms that must never ship.
           BRAND_DENYLIST: ${{ vars.BRAND_DENYLIST }}
 
   security:

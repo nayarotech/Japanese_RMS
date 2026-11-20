@@ -5,7 +5,23 @@
   "type": "module",
   "description": "Background worker: outbox relay, durable jobs, scheduled tasks.",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "dev": "tsx watch --conditions=development --env-file=../../.env src/main.ts",
+    "start": "node dist/main.js",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@restaurant-platform/api": "workspace:*",
+    "@restaurant-platform/config": "workspace:*",
+    "@socket.io/redis-emitter": "5.1.0",
+    "ioredis": "6.0.0",
+    "kysely": "0.29.8",
+    "pg": "8.23.1",
+    "pino": "10.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
+    "tsx": "4.23.15"
   }
 }

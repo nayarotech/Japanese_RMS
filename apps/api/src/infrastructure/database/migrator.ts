@@ -1,0 +1,50 @@
+import { Kysely, PostgresDialect } from "kysely";
+import { type Migration, type MigrationProvider, Migrator } from "kysely/migration";
+import pg from "pg";
+import * as foundation from "./migrations/2026112001_foundation.js";
+import * as dineIn from "./migrations/2026112002_dine_in.js";
+
+/** Static provider: migrations are bundled with the build (no filesystem scanning at runtime). */
+class StaticMigrationProvider implements MigrationProvider {
+  getMigrations(): Promise<Record<string, Migration>> {
+    return Promise.resolve({
+      "2026112001_foundation": foundation,
+      "2026112002_dine_in": dineIn,
+    });
+  }
+}
+
+export interface MigratorConnection {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  ssl?: boolean;
+}
+
+/** Runs pending migrations as the MIGRATOR role. Never call this from the running API or worker. */
+export async function migrateToLatest(conn: MigratorConnection): Promise<string[]> {
+  const db = new Kysely<unknown>({
+    dialect: new PostgresDialect({
+      pool: new pg.Pool({ ...conn, max: 1, ssl: conn.ssl ? { rejectUnauthorized: true } : false }),
+    }),
+  });
+  try {
+    const migrator = new Migrator({
+      db,
+      provider: new StaticMigrationProvider(),
+      migrationTableSchema: "app",
+    });
+    const { error, results } = await migrator.migrateToLatest();
+    const failed = results?.find((r) => r.status === "Error");
+    if (error || failed) {
+      throw new Error(
+        `Migration failed${failed ? ` at ${failed.migrationName}` : ""}: ${String(error)}`,
+      );
+    }
+    return (results ?? []).map((r) => r.migrationName);
+  } finally {
+    await db.destroy();
+  }
+}

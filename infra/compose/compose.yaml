@@ -20,6 +20,8 @@ services:
       DATABASE_MIGRATOR_PASSWORD: ${DATABASE_MIGRATOR_PASSWORD:?set in .env}
       DATABASE_APP_USER: ${DATABASE_APP_USER:?set in .env}
       DATABASE_APP_PASSWORD: ${DATABASE_APP_PASSWORD:?set in .env}
+      DATABASE_RELAY_USER: ${DATABASE_RELAY_USER:?set in .env}
+      DATABASE_RELAY_PASSWORD: ${DATABASE_RELAY_PASSWORD:?set in .env}
       TZ: UTC
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -40,7 +42,7 @@ services:
     command:
       ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set in .env}", "--appendonly", "no"]
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:

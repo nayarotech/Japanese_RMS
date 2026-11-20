@@ -1,6 +1,88 @@
 /**
- * @restaurant-platform/config: public entry point.
+ * @restaurant-platform/config: typed, validated runtime configuration.
  *
- * PHASE 0 PLACEHOLDER. The environment schema is documented in ../README.md and the root .env.example.
+ * Parse once at process start (`loadConfig(process.env)`), fail fast on invalid values, then pass the
+ * frozen object explicitly. Business code never reads `process.env` directly.
  */
-export {};
+import { z } from "zod";
+
+const bool = z.enum(["true", "false"]).transform((v) => v === "true");
+
+const csv = z.string().transform((v) =>
+  v
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
+const EnvSchema = z.object({
+  APP_ENV: z.enum(["development", "test", "staging", "production"]).default("development"),
+  INSTANCE_NAME: z.string().default("local"),
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+  LOG_PRETTY: bool.default(false),
+
+  API_PORT: z.coerce.number().int().min(0).max(65535).default(4000),
+  WORKER_HEALTH_PORT: z.coerce.number().int().min(0).max(65535).default(4100),
+  APP_PUBLIC_ORIGINS: csv.default(["http://localhost:3000"]),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1),
+
+  POSTGRES_HOST: z.string().min(1),
+  POSTGRES_PORT: z.coerce.number().int().default(5432),
+  POSTGRES_DB: z.string().min(1),
+  DATABASE_APP_USER: z.string().min(1),
+  DATABASE_APP_PASSWORD: z.string().min(1),
+  DATABASE_RELAY_USER: z.string().min(1).default("rp_relay"),
+  DATABASE_RELAY_PASSWORD: z.string().min(1).optional(),
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+  DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
+  DATABASE_SSL_MODE: z.enum(["disable", "require", "verify-full"]).default("disable"),
+
+  REDIS_URL: z.string().min(1),
+  REDIS_PASSWORD: z.string().optional(),
+  REDIS_TLS: bool.default(false),
+
+  // Secret for HMAC-derived values (CSRF tokens). At least 32 characters; rotate to invalidate CSRF tokens.
+  SESSION_SECRET: z.string().min(32),
+  SESSION_IDLE_TIMEOUT_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(5)
+    .max(24 * 60)
+    .default(30),
+  SESSION_ABSOLUTE_TIMEOUT_HOURS: z.coerce.number().int().min(1).max(72).default(12),
+  COOKIE_SECURE: bool.default(true),
+
+  SOCKET_IO_PATH: z.string().default("/socket.io"),
+  SHUTDOWN_GRACE_PERIOD_MS: z.coerce.number().int().min(0).default(25000),
+
+  DEFAULT_LOCALE: z.enum(["ja", "en"]).default("ja"),
+  DEFAULT_TIME_ZONE: z.string().default("Asia/Tokyo"),
+});
+
+export type AppConfig = Readonly<z.infer<typeof EnvSchema>>;
+
+export class ConfigError extends Error {
+  override name = "ConfigError";
+}
+
+export function loadConfig(env: Record<string, string | undefined>): AppConfig {
+  const parsed = EnvSchema.safeParse(env);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+    throw new ConfigError(`Invalid configuration: ${issues}`);
+  }
+  const cfg = parsed.data;
+
+  // Production guards: refuse to start with unsafe settings.
+  if (cfg.APP_ENV === "staging" || cfg.APP_ENV === "production") {
+    const problems: string[] = [];
+    if (!cfg.COOKIE_SECURE) problems.push("COOKIE_SECURE must be true");
+    if (cfg.DATABASE_SSL_MODE !== "verify-full")
+      problems.push("DATABASE_SSL_MODE must be verify-full");
+    if (cfg.LOG_PRETTY) problems.push("LOG_PRETTY must be false");
+    if (!cfg.REDIS_TLS) problems.push("REDIS_TLS must be true");
+    if (problems.length > 0)
+      throw new ConfigError(`Unsafe ${cfg.APP_ENV} configuration: ${problems.join("; ")}`);
+  }
+  return Object.freeze(cfg);
+}

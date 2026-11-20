@@ -2,6 +2,11 @@ packages:
   - "apps/*"
   - "packages/*"
 
+# Supply-chain guard: only resolve package versions published at least 14 days ago.
+minimumReleaseAge: 20160
+
 # Only allow install scripts from packages we have explicitly reviewed.
-# Add entries deliberately (e.g. native argon2 bindings) when they are introduced.
-onlyBuiltDependencies: []
+onlyBuiltDependencies:
+  - "@node-rs/argon2"
+  - esbuild
+  - sharp

@@ -6,12 +6,16 @@
   "description": "Typed, validated runtime configuration loaded from environment variables (api and worker).",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
       "default": "./dist/index.js"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
   }
 }

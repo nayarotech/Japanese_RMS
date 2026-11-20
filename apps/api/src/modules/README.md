@@ -39,6 +39,7 @@ and `infrastructure/`. Add `domain/` when there are real invariants worth isolat
 | `menus`          | Categories, products, options, prices, availability.                               |
 | `tables`         | Floor layout, tables, table sessions (seating lifecycle).                          |
 | `orders`         | POS orders, items, price snapshots, authoritative totals.                          |
+| `kitchen`        | Kitchen tickets, item-level prep/serve status, food-ready notifications.           |
 | `payments`       | Restaurant checkout, payment records, refunds (NOT SaaS subscription billing).     |
 | `qr-ordering`    | Customer self-ordering at the table via QR.                                        |
 | `online-orders`  | Online ordering with pickup and delivery fulfilment.                               |

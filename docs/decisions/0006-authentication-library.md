@@ -1,6 +1,6 @@
 # 0006. Authentication library selection
 
-- **Status:** Open (decide before Phase 2)
+- **Status:** Accepted for Phase 1 (2026-11-20). Revisit before MFA/recovery work.
 - **Date:** 2026-11-19
 - **Related:** docs/security/security-architecture.md
 
@@ -23,3 +23,13 @@ authorization, RLS and tenant model. No custom protocol or crypto.
 
 Spike Option 1 in Phase 2. Accept it if its schema, session model and white-label UI needs fit. Otherwise use Option 2.
 Option 3 is unlikely because of white-label and cost constraints.
+
+## Decision (2026-11-20)
+
+Option 2 was implemented for Phase 1: a server-side `staff_sessions` table (SHA-256 token hashes only), `@node-rs/argon2`
+(Argon2id, OWASP parameters), idle and absolute expiry, revocation on logout, lockout after repeated failures, Redis rate limits, and
+HMAC-derived CSRF tokens. No custom cryptography or token formats.
+
+**Not yet implemented:** MFA (TOTP/WebAuthn), account recovery, staff invitation and password change flows, session listing.
+These are required before production, at least for owners and platform operators. Re-evaluate Better Auth for those
+features before building them by hand.

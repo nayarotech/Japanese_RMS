@@ -1,77 +1,140 @@
 # restaurant-platform
 
-Multi-tenant, white-label, subscription-based restaurant management platform (POS, table management,
-QR ordering, online ordering with pickup/delivery, reporting) for the Japanese market.
+Multi-tenant, white-label restaurant management platform for the Japanese market: table management, QR ordering,
+POS, kitchen display, waiter app and cash checkout.
 
-> **Internal repository.** `restaurant-platform` is a neutral internal name. The customer-facing product name,
-> logos and all other branding are configured at runtime by authorized platform administrators and are never
-> hard-coded. See [docs/architecture/05-white-label-branding.md](docs/architecture/05-white-label-branding.md).
+> `restaurant-platform` is a neutral internal name. The customer-facing product name, logo and colors come from the
+> brand configuration at runtime and are never hard-coded. See [docs/architecture/05-white-label-branding.md](docs/architecture/05-white-label-branding.md).
 
-## Status: Phase 0 (architecture and scaffolding)
+## What works today (Phase 1: dine-in, Basic package)
 
-| Exists now                                                                            | Documented only (not implemented)                                                      |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| pnpm workspace, strict TypeScript, ESLint (with architecture import guards), Prettier | Every business module, every API route, authentication, database tables and migrations |
-| App/package shells with placeholder entry files                                       | Subscription/entitlement logic, WebSocket events, background jobs, UI pages            |
-| Dockerfile templates, local Compose (PostgreSQL 18, Redis 8), nginx routing contract  | Production deployment, monitoring, backups                                             |
-| Local DB role bootstrap (migrator vs. app role, no tables)                            | RLS policies, schema                                                                   |
-| CI: format, lint, typecheck, brand-leak check, dependency audit, secret scan          | Integration/security tests, image scanning, deployments                                |
-| Architecture docs, ADRs, module responsibility READMEs                                | Any validation of security, scalability or performance                                 |
+1. Staff seat guests, or a guest scans the table's QR and the table opens automatically.
+2. Guests order from their phone (no app, no account). Each item can carry its own note ("less spicy", "extra noodles").
+3. Orders appear live on the POS and the kitchen screen.
+4. The kitchen marks items ready one by one, and the waiter gets a live "food ready" alert and marks them served.
+5. Guests can keep ordering on the same table, and the cashier sees one combined bill.
+6. Cash checkout with change calculation and a receipt. The table becomes free again.
 
-No security property, scaling behaviour or feature has been validated. The documents describe intent.
+Japanese and English UI. All prices, tax and totals are calculated on the server.
 
-## Repository layout
+## Tech stack
+
+Next.js 16 (App Router, React 19, Tailwind 4) · Express 5 · PostgreSQL 18 (Kysely, row-level security) · Redis 8 ·
+Socket.IO · TypeScript 6 · pnpm workspaces · Docker · Vitest.
 
 ```
-apps/
-  api/        Express 5 + Socket.IO modular monolith (business modules live here)
-  worker/     Background worker: outbox relay, durable jobs, schedules
-  web/        Next.js App Router: platform admin, restaurant admin, POS, QR + online ordering
-packages/
-  contracts/  Shared Zod schemas / types for HTTP + WebSocket contracts
-  config/     Validated runtime configuration from environment variables
-infra/
-  docker/     Multi-stage, non-root Dockerfiles (api, worker, web)
-  compose/    Local development stack + local DB role bootstrap
-  proxy/      Reverse-proxy routing contract (nginx, local)
-  deployment/ Production-oriented templates and target topology
-  monitoring/ Observability plan
-docs/
-  architecture/  Architecture documents A–K and supporting docs
-  decisions/     Architecture Decision Records (ADRs)
-  security/      Security architecture
-  api/           API conventions
-  operations/    Runbooks (planned)
-scripts/      Repository scripts (brand-leak check)
-.github/      CI workflow, Dependabot
+apps/api       Express API + Socket.IO (business modules in src/modules)
+apps/worker    Background worker: relays saved events to live screens
+apps/web       Next.js frontend: staff screens + guest QR menu
+packages/      Shared config and API types
+infra/         Dockerfiles, Docker Compose, nginx
+docs/          Architecture, decisions (ADRs), security, operations
 ```
 
-Start with [docs/architecture/README.md](docs/architecture/README.md).
+## Requirements
 
-## Prerequisites
+- **Node.js 24 or 26** (`node -v`)
+- **pnpm 10**: `npm install -g pnpm@10`
+- **Docker Desktop** (with Docker Compose)
 
-- Node.js 26 LTS (`.nvmrc`; 24 LTS also accepted), pnpm 10 (`packageManager` field), Docker with Compose v2.
+## How to run (local)
 
-## Common commands
+### 1. Install and configure
 
 ```sh
-pnpm install            # install workspace dev tooling
-pnpm verify             # format check + lint + typecheck + tests
-pnpm check:brand        # white-label leak check (needs BRAND_DENYLIST env var)
-
-cp .env.example .env    # local only; never commit .env
-docker compose -f infra/compose/compose.yaml --env-file .env up -d     # PostgreSQL + Redis
-docker compose -f infra/compose/compose.yaml --env-file .env down      # stop (add -v to wipe local data)
+git clone https://github.com/nayarotech/Japanese_RMS.git
+cd Japanese_RMS
+pnpm install
+cp .env.example .env
 ```
 
-App containers (`--profile apps`) will build once the apps are implemented in Phase 1.
+Edit `.env`:
 
-## Ground rules
+- Set `SESSION_SECRET` to a random value of at least 32 characters: `openssl rand -base64 48`
+- If port **6379** is already used on your machine, set `REDIS_PORT=6380` and `REDIS_URL=redis://localhost:6380`
+- If port **5432** is already used, change `POSTGRES_PORT` the same way
 
-1. Backend is the only enforcement point for authentication, authorization, tenant isolation and entitlements.
-2. Tenant identity always comes from the authenticated session, never from client input.
-3. PostgreSQL is the source of truth. Redis is disposable.
-4. Money is integer yen, calculated server-side.
-5. No developer branding anywhere customer-facing.
-6. No secrets in Git.
-7. Keep it simple: add abstractions, dependencies and infrastructure only when a real requirement justifies them.
+### 2. Start PostgreSQL and Redis
+
+```sh
+docker compose -f infra/compose/compose.yaml --env-file .env up -d
+```
+
+### 3. Create the database and demo data
+
+```sh
+pnpm --filter @restaurant-platform/api db:reset   # creates roles, schema and tables (local only)
+pnpm --filter @restaurant-platform/api db:seed    # demo store, staff accounts, 12 tables, menu
+```
+
+The seed prints a guest QR link for table A-3 (`http://localhost:3000/t/...`).
+
+### 4. Start the apps (3 terminals)
+
+```sh
+pnpm --filter @restaurant-platform/api dev       # API      → http://localhost:4000
+pnpm --filter @restaurant-platform/worker dev    # live updates
+pnpm --filter @restaurant-platform/web dev       # Frontend → http://localhost:3000
+```
+
+### 5. Open it
+
+- **Staff:** http://localhost:3000/login
+  - Accounts: `owner@demo.example.test`, `manager@…`, `cashier@…`, `waiter@…`, `kitchen@…` (all `@demo.example.test`)
+  - The local demo password is in `apps/api/src/infrastructure/database/seed-dev.ts`
+- **Guest:** open the QR link printed by the seed, or go to **Table QR** → select a table → _Preview customer screen_.
+  Use a private window or a phone so the guest and staff sessions don't mix.
+
+| Screen               | Path                   | Who                             |
+| -------------------- | ---------------------- | ------------------------------- |
+| Table map            | `/tables`              | owner, manager, cashier, waiter |
+| POS / order entry    | `/pos/:sessionId`      | owner, manager, cashier, waiter |
+| Checkout             | `/checkout/:sessionId` | owner, manager, cashier         |
+| Kitchen              | `/kitchen`             | owner, manager, kitchen         |
+| Floor (waiter phone) | `/floor`               | owner, manager, waiter          |
+| Table QR codes       | `/admin/tables`        | owner, manager                  |
+| Menu                 | `/admin/menu`          | owner, manager                  |
+| Guest menu           | `/t/:qrToken`          | customers                       |
+
+### Stop / reset
+
+```sh
+docker compose -f infra/compose/compose.yaml --env-file .env down       # stop
+docker compose -f infra/compose/compose.yaml --env-file .env down -v    # stop and delete local data
+pnpm --filter @restaurant-platform/api db:reset && pnpm --filter @restaurant-platform/api db:seed   # fresh demo data
+```
+
+## Tests and checks
+
+```sh
+pnpm --filter @restaurant-platform/api test   # 95 tests against real PostgreSQL + Redis (Docker must be running)
+pnpm lint
+pnpm typecheck
+pnpm verify                                    # format + lint + typecheck + tests
+pnpm build                                     # production builds
+```
+
+Tests create their own database (`restaurant_platform_test`) on every run and never touch your demo data.
+
+## Run with Docker (all services)
+
+```sh
+docker compose -f infra/compose/compose.yaml --env-file .env --profile apps up --build
+```
+
+The app is served through nginx at http://localhost:8080. For this mode, set `APP_PUBLIC_ORIGINS=http://localhost:8080`
+and leave `NEXT_PUBLIC_SOCKET_URL` empty in `.env`.
+
+## Not yet included
+
+MFA and password recovery, staff management screens, split bills and discounts, card / e-money / QR payments,
+online ordering and delivery, reports, subscription management, and production deployment. Japanese text and the
+tax/receipt rules still need partner approval.
+
+## Documentation
+
+- Dine-in feature reference (data model, API, events, permissions): [docs/architecture/14-dine-in-workflow.md](docs/architecture/14-dine-in-workflow.md)
+- QR ordering rules: [docs/security/qr-ordering.md](docs/security/qr-ordering.md)
+- Architecture overview: [docs/architecture/README.md](docs/architecture/README.md)
+- Decisions: [docs/decisions/README.md](docs/decisions/README.md)
+- Detailed local guide: [docs/operations/local-development.md](docs/operations/local-development.md)

@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens taken from the approved Figma file (Japan RMS / English RMS).
+ * --color-brand is overridden at runtime from the white-label brand configuration;
+ * nothing brand-specific is baked into the build.
+ */
+@theme {
+  --color-brand: #db020e;
+  --color-brand-tint: #fbe7e8;
+  --color-brand-dark: #b0010b;
+  --color-ink: #181d20;
+  --color-ink-2: #3e454b;
+  --color-muted: #5d646a;
+  --color-placeholder: #8a9197;
+  --color-nav-muted: #c3c8cc;
+  --color-line: #dfe2e5;
+  --color-line-2: #e3e6e8;
+  --color-line-soft: #eef0f1;
+  --color-canvas: #f4f5f6;
+  --color-chip: #f1f2f3;
+  --color-panel: #fafafb;
+  --color-ok: #15803d;
+
+  --font-sans: var(--font-inter), var(--font-noto-jp), ui-sans-serif, system-ui, sans-serif;
+  --radius-card: 12px;
+}
+
+html,
+body {
+  height: 100%;
+}
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Sidebar icons: SVG files used as masks so they inherit the current text color. */
+.nav-icon {
+  width: 24px;
+  height: 24px;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}

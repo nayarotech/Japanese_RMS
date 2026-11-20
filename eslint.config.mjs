@@ -32,6 +32,35 @@ export default defineConfig([
     },
   },
 
+  // React: `onClick={() => setState(x)}` shorthand is idiomatic.
+  {
+    files: ["**/*.tsx"],
+    rules: {
+      "@typescript-eslint/no-confusing-void-expression": ["error", { ignoreArrowShorthand: true }],
+    },
+  },
+
+  // Node scripts (plain JS).
+  {
+    files: ["**/scripts/**/*.mjs"],
+    languageOptions: { globals: { console: "readonly", process: "readonly", URL: "readonly" } },
+  },
+
+  // Tests: HTTP response bodies are untyped JSON; assertions validate them at runtime.
+  {
+    files: ["**/*.test.ts", "**/test/**/*.ts"],
+    rules: {
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unsafe-call": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/no-unsafe-return": "off",
+      "@typescript-eslint/no-non-null-assertion": "off",
+      "@typescript-eslint/restrict-template-expressions": "off",
+      "@typescript-eslint/no-confusing-void-expression": "off",
+    },
+  },
+
   // Architecture guard: the domain layer must not depend on frameworks or infrastructure.
   // See docs/architecture/02-module-boundaries.md.
   {

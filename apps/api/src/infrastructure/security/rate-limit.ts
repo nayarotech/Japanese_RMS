@@ -1,0 +1,78 @@
+/**
+ * Distributed rate limiting (Redis), with an in-memory insurance limiter if Redis is unavailable.
+ * Limits are injected so tests can tune them; production values live in DEFAULT_RATE_LIMITS.
+ */
+import type { NextFunction, Request, Response } from "express";
+import type { Redis } from "ioredis";
+import { RateLimiterMemory, RateLimiterRedis, RateLimiterRes } from "rate-limiter-flexible";
+import { Errors } from "../../shared/errors/app-error.js";
+
+export interface RateLimitRule {
+  points: number;
+  durationSeconds: number;
+}
+
+export interface RateLimitConfig {
+  loginPerIp: RateLimitRule;
+  loginPerEmail: RateLimitRule;
+  guestJoinPerIp: RateLimitRule;
+  guestOrderPerSession: RateLimitRule;
+  publicReadPerIp: RateLimitRule;
+  staffMutationPerSession: RateLimitRule;
+}
+
+export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
+  loginPerIp: { points: 20, durationSeconds: 600 },
+  loginPerEmail: { points: 5, durationSeconds: 300 },
+  guestJoinPerIp: { points: 10, durationSeconds: 600 },
+  guestOrderPerSession: { points: 10, durationSeconds: 60 },
+  publicReadPerIp: { points: 300, durationSeconds: 60 },
+  staffMutationPerSession: { points: 120, durationSeconds: 60 },
+};
+
+export type Limiter = (key: string) => Promise<void>;
+export type RateLimiters = Record<keyof RateLimitConfig, Limiter>;
+
+export function createRateLimiters(
+  redis: Redis,
+  config: RateLimitConfig,
+  prefix = "rl",
+): RateLimiters {
+  const make = (name: keyof RateLimitConfig): Limiter => {
+    const rule = config[name];
+    const limiter = new RateLimiterRedis({
+      storeClient: redis,
+      keyPrefix: `${prefix}:${name}`,
+      points: rule.points,
+      duration: rule.durationSeconds,
+      insuranceLimiter: new RateLimiterMemory({
+        points: rule.points,
+        duration: rule.durationSeconds,
+      }),
+    });
+    return async (key: string) => {
+      try {
+        await limiter.consume(key);
+      } catch (err) {
+        if (err instanceof RateLimiterRes)
+          throw Errors.rateLimited(Math.ceil(err.msBeforeNext / 1000));
+        throw err;
+      }
+    };
+  };
+  return {
+    loginPerIp: make("loginPerIp"),
+    loginPerEmail: make("loginPerEmail"),
+    guestJoinPerIp: make("guestJoinPerIp"),
+    guestOrderPerSession: make("guestOrderPerSession"),
+    publicReadPerIp: make("publicReadPerIp"),
+    staffMutationPerSession: make("staffMutationPerSession"),
+  };
+}
+
+export function limitByIp(limiter: Limiter) {
+  return async (req: Request, _res: Response, next: NextFunction) => {
+    await limiter(req.ip ?? "unknown");
+    next();
+  };
+}
