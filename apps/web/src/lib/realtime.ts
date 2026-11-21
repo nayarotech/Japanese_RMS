@@ -73,3 +73,59 @@ export function useRealtime(
 
   return { connected };
 }
+
+const ONLINE_ORDER_EVENTS: readonly RealtimeEvent[] = [
+  "online.order.accepted",
+  "online.order.rejected",
+  "online.order.cancelled",
+  "online.order.preparing",
+  "online.order.ready",
+  "online.order.dispatched",
+  "online.order.delivered",
+  "online.order.completed",
+  "online.order.payment_recorded",
+];
+
+/**
+ * Customer order tracking: a dedicated socket authenticated with the order-tracking token (handshake `auth`, never a
+ * cookie). It only ever receives id-only hints for that one order; the page refetches the status over HTTP.
+ */
+export function useOrderTracking(
+  token: string | null,
+  onChange: () => void,
+): { connected: boolean } {
+  const [connected, setConnected] = useState(false);
+  const handler = useRef(onChange);
+  handler.current = onChange;
+
+  useEffect(() => {
+    if (!token) return;
+    const url = process.env.NEXT_PUBLIC_SOCKET_URL ?? "";
+    const socket = io(url || undefined, {
+      path: "/socket.io",
+      withCredentials: false,
+      auth: { orderToken: token },
+      transports: ["websocket", "polling"],
+    });
+    const refresh = () => {
+      handler.current();
+    };
+    socket.on("session.ready", () => {
+      setConnected(true);
+      refresh(); // reconcile after (re)connect
+    });
+    socket.on("disconnect", () => {
+      setConnected(false);
+    });
+    for (const e of ONLINE_ORDER_EVENTS) socket.on(e, refresh);
+    const poll = setInterval(() => {
+      if (!socket.connected) refresh();
+    }, 15_000);
+    return () => {
+      clearInterval(poll);
+      socket.disconnect();
+    };
+  }, [token]);
+
+  return { connected };
+}

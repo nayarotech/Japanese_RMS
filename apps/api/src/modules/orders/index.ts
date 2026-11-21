@@ -1,6 +1,7 @@
 /**
- * orders: order submissions and lines for a dining session, with server-authoritative price snapshots.
- * STAFF_POS and TABLE_QR orders share this single implementation.
+ * orders: order submissions and lines with server-authoritative price snapshots.
+ * ONE implementation for every channel: STAFF_POS and TABLE_QR orders belong to a dining session;
+ * ONLINE_PICKUP and ONLINE_DELIVERY orders are standalone (no session, no table) and use the takeout tax channel.
  */
 import { z } from "zod";
 import type { Tx } from "../../infrastructure/database/db.js";
@@ -18,15 +19,16 @@ import {
   statusesForOrderItems,
   syncEditedItem,
   voidItemForOrderItem,
+  voidOrderTicket,
 } from "../kitchen/index.js";
-import { getOrderableItems } from "../menus/index.js";
+import { type TaxChannel, getOrderableItems } from "../menus/index.js";
 import { getLocationSettings } from "../restaurants/index.js";
 import { assertAcceptsOrders, lockSession } from "../tables/index.js";
 import { MAX_NOTE_LENGTH, normalizeNote } from "./domain/notes.js";
 import { type BillTotals, computeBill } from "./domain/pricing.js";
 
 export { normalizeNote, MAX_NOTE_LENGTH } from "./domain/notes.js";
-export { computeBill, type BillTotals } from "./domain/pricing.js";
+export { computeBill, type BillTotals, type PricedLine } from "./domain/pricing.js";
 
 export const MAX_LINES_PER_ORDER = 50;
 
@@ -74,6 +76,87 @@ export interface OrderView {
   items: OrderItemView[];
 }
 
+export type OnlineOrderSource = "ONLINE_PICKUP" | "ONLINE_DELIVERY";
+
+const ITEM_COLUMNS = [
+  "id",
+  "menu_item_id",
+  "name_ja",
+  "name_en",
+  "unit_price_yen",
+  "quantity",
+  "line_total_yen",
+  "tax_rate_bp",
+  "note",
+  "status",
+  "version",
+] as const;
+
+/** Inserts an order and its lines at CURRENT server prices (and the channel's tax rate). Shared by every channel. */
+async function insertOrder(
+  tx: Tx,
+  args: {
+    tenantId: string;
+    locationId: string;
+    tableSessionId: string | null;
+    source: OrderSource;
+    createdByUserId: string | null;
+    guestSessionId: string | null;
+    lines: readonly OrderLineInput[];
+    channel: TaxChannel;
+  },
+) {
+  if (args.lines.length === 0 || args.lines.length > MAX_LINES_PER_ORDER) {
+    throw Errors.validation({ items: `1-${String(MAX_LINES_PER_ORDER)} lines required` });
+  }
+  const menu = await getOrderableItems(
+    tx,
+    args.locationId,
+    args.lines.map((l) => l.menuItemId),
+    args.channel,
+  );
+  const orderNo = await nextCounter(tx, args.tenantId, args.locationId, "order");
+  const order = await tx
+    .insertInto("orders")
+    .values({
+      tenant_id: args.tenantId,
+      location_id: args.locationId,
+      table_session_id: args.tableSessionId,
+      order_no: orderNo,
+      source: args.source,
+      created_by_user_id: args.createdByUserId,
+      guest_session_id: args.guestSessionId,
+    })
+    .returning(["id", "created_at"])
+    .executeTakeFirstOrThrow();
+
+  // Each submitted line is stored as-is: identical dishes with different notes remain separate lines.
+  const items = await tx
+    .insertInto("order_items")
+    .values(
+      args.lines.map((l) => {
+        const m = menu.get(l.menuItemId);
+        if (!m) throw Errors.unprocessable("item_not_found");
+        return {
+          tenant_id: args.tenantId,
+          location_id: args.locationId,
+          order_id: order.id,
+          table_session_id: args.tableSessionId,
+          menu_item_id: m.id,
+          name_ja: m.nameJa,
+          name_en: m.nameEn,
+          unit_price_yen: m.priceYen,
+          quantity: l.quantity,
+          tax_rate_bp: m.taxRateBp,
+          note: normalizeNote(l.note),
+        };
+      }),
+    )
+    .returning([...ITEM_COLUMNS])
+    .execute();
+  return { orderId: order.id, createdAt: order.created_at, orderNo, items };
+}
+
 /**
  * Places an order on a dining session. Locks the session row (serializes with checkout), validates
  * items against the current menu, snapshots prices/tax, creates the kitchen ticket and outbox events
@@ -85,76 +168,26 @@ export async function placeOrder(
   tableSessionId: string,
   lines: readonly OrderLineInput[],
 ): Promise<OrderView> {
-  if (lines.length === 0 || lines.length > MAX_LINES_PER_ORDER) {
-    throw Errors.validation({ items: `1-${String(MAX_LINES_PER_ORDER)} lines required` });
-  }
   const session = await lockSession(tx, actor.locationId, tableSessionId);
   assertAcceptsOrders(session.status);
-
-  const menu = await getOrderableItems(
-    tx,
-    actor.locationId,
-    lines.map((l) => l.menuItemId),
-  );
-  const orderNo = await nextCounter(tx, actor.tenantId, actor.locationId, "order");
   const source: OrderSource = actor.kind === "staff" ? "STAFF_POS" : "TABLE_QR";
-
-  const order = await tx
-    .insertInto("orders")
-    .values({
-      tenant_id: actor.tenantId,
-      location_id: actor.locationId,
-      table_session_id: tableSessionId,
-      order_no: orderNo,
-      source,
-      created_by_user_id: actor.kind === "staff" ? actor.userId : null,
-      guest_session_id: actor.kind === "guest" ? actor.guestSessionId : null,
-    })
-    .returning(["id", "created_at"])
-    .executeTakeFirstOrThrow();
-
-  // Each submitted line is stored as-is: identical dishes with different notes remain separate lines.
-  const items = await tx
-    .insertInto("order_items")
-    .values(
-      lines.map((l) => {
-        const m = menu.get(l.menuItemId);
-        if (!m) throw Errors.unprocessable("item_not_found");
-        return {
-          tenant_id: actor.tenantId,
-          location_id: actor.locationId,
-          order_id: order.id,
-          table_session_id: tableSessionId,
-          menu_item_id: m.id,
-          name_ja: m.nameJa,
-          name_en: m.nameEn,
-          unit_price_yen: m.priceYen,
-          quantity: l.quantity,
-          tax_rate_bp: m.taxRateBp,
-          note: normalizeNote(l.note),
-        };
-      }),
-    )
-    .returning([
-      "id",
-      "menu_item_id",
-      "name_ja",
-      "name_en",
-      "unit_price_yen",
-      "quantity",
-      "line_total_yen",
-      "tax_rate_bp",
-      "note",
-      "status",
-      "version",
-    ])
-    .execute();
+  const { orderId, createdAt, orderNo, items } = await insertOrder(tx, {
+    tenantId: actor.tenantId,
+    locationId: actor.locationId,
+    tableSessionId,
+    source,
+    createdByUserId: actor.kind === "staff" ? actor.userId : null,
+    guestSessionId: actor.kind === "guest" ? actor.guestSessionId : null,
+    lines,
+    channel: "dine_in",
+  });
 
   // Kitchen ticket items preserve insertion order (one per line).
   const ticketId = await createTicket(tx, {
     tenantId: actor.tenantId,
     locationId: actor.locationId,
-    orderId: order.id,
+    orderId: orderId,
+    orderNo,
     tableSessionId,
     tableName: session.tableName,
     source,
@@ -170,7 +203,7 @@ export async function placeOrder(
   await appendOutbox(tx, actor.tenantId, actor.locationId, {
     type: "order.created",
     payload: {
-      orderId: order.id,
+      orderId: orderId,
       orderNo,
       tableSessionId,
       tableName: session.tableName,
@@ -181,7 +214,7 @@ export async function placeOrder(
   await recordAudit(tx, actor, {
     action: "order.created",
     targetType: "order",
-    targetId: order.id,
+    targetId: orderId,
     metadata: { source, lines: items.length, ticketId },
   });
 
@@ -190,10 +223,10 @@ export async function placeOrder(
     items.map((i) => i.id),
   );
   return {
-    id: order.id,
+    id: orderId,
     orderNo,
     source,
-    createdAt: order.created_at,
+    createdAt: createdAt,
     items: items.map((i) => toItemView(i, statuses.get(i.id))),
   };
 }
@@ -355,12 +388,25 @@ export async function sessionTotals(
     .groupBy("table_session_id")
     .execute();
   return new Map(
-    rows.map((r) => [
-      r.table_session_id,
-      { subtotalYen: Number(r.subtotal), itemCount: Number(r.qty) },
-    ]),
+    rows.flatMap((r) =>
+      r.table_session_id === null
+        ? []
+        : [
+            [
+              r.table_session_id,
+              { subtotalYen: Number(r.subtotal), itemCount: Number(r.qty) },
+            ] as const,
+          ],
+    ),
   );
 }
+
+/** Online order lines are changed only through the online-order workflow (cancel), never line by line at a table. */
+const notATableOrder = () =>
+  Errors.conflict(
+    "not_a_table_order",
+    "Online order items are managed from the Online orders screen",
+  );
 
 async function lockOrderItem(tx: Tx, locationId: string, orderItemId: string) {
   const item = await tx
@@ -388,6 +434,7 @@ export async function editOrderItem(
     .where("location_id", "=", ctx.locationId)
     .executeTakeFirst();
   if (!probe) throw Errors.notFound("order item");
+  if (probe.table_session_id === null) throw notATableOrder();
   const session = await lockSession(tx, ctx.locationId, probe.table_session_id);
   if (session.status === "closed")
     throw Errors.conflict("session_closed", "This table session is closed");
@@ -409,7 +456,7 @@ export async function editOrderItem(
     type: "order.updated",
     payload: {
       orderId: item.order_id,
-      tableSessionId: item.table_session_id,
+      tableSessionId: session.id,
       orderItemId,
       change: "edited",
     },
@@ -439,6 +486,7 @@ export async function voidOrderItem(
     .where("location_id", "=", ctx.locationId)
     .executeTakeFirst();
   if (!probe) throw Errors.notFound("order item");
+  if (probe.table_session_id === null) throw notATableOrder();
   const session = await lockSession(tx, ctx.locationId, probe.table_session_id);
   if (session.status === "closed")
     throw Errors.conflict("session_closed", "This table session is closed");
@@ -470,7 +518,7 @@ export async function voidOrderItem(
     type: "order.updated",
     payload: {
       orderId: item.order_id,
-      tableSessionId: item.table_session_id,
+      tableSessionId: session.id,
       orderItemId,
       change: "voided",
     },
@@ -481,4 +529,136 @@ export async function voidOrderItem(
     targetId: orderItemId,
     metadata: { reason, kitchenStatus: kitchen.status },
   });
+}
+
+// ---------------------------------------------------------------- online (standalone) orders
+
+export interface OnlineOrderRecord {
+  orderId: string;
+  orderNo: number;
+  createdAt: Date;
+  items: OrderItemView[];
+}
+
+/**
+ * Creates a standalone online order (no dining session, no table) with takeout-channel tax snapshots.
+ * It is NOT sent to the kitchen yet: that happens when the restaurant accepts it (`sendOrderToKitchen`).
+ */
+export async function createOnlineOrder(
+  tx: Tx,
+  scope: { tenantId: string; locationId: string },
+  source: OnlineOrderSource,
+  lines: readonly OrderLineInput[],
+): Promise<OnlineOrderRecord> {
+  const { orderId, orderNo, createdAt, items } = await insertOrder(tx, {
+    tenantId: scope.tenantId,
+    locationId: scope.locationId,
+    tableSessionId: null,
+    source,
+    createdByUserId: null,
+    guestSessionId: null,
+    lines,
+    channel: "takeout",
+  });
+  return { orderId, orderNo, createdAt, items: items.map((i) => toItemView(i, undefined)) };
+}
+
+/** Lines of one order with their kitchen status (online order detail, tracking page). */
+export async function getOrderItems(tx: Tx, orderId: string): Promise<OrderItemView[]> {
+  const items = await tx
+    .selectFrom("order_items")
+    .select([...ITEM_COLUMNS])
+    .where("order_id", "=", orderId)
+    .orderBy("created_at")
+    .orderBy("id")
+    .execute();
+  const statuses = await statusesForOrderItems(
+    tx,
+    items.map((i) => i.id),
+  );
+  return items.map((i) => toItemView(i, statuses.get(i.id)));
+}
+
+/** Sends an accepted online order to the existing kitchen workflow (one ticket, one item per line). */
+export async function sendOrderToKitchen(
+  tx: Tx,
+  ctx: StaffContext,
+  orderId: string,
+  opts: { dueAt: Date | null },
+): Promise<string> {
+  const order = await tx
+    .selectFrom("orders")
+    .select(["id", "order_no", "source", "table_session_id"])
+    .where("id", "=", orderId)
+    .where("location_id", "=", ctx.locationId)
+    .executeTakeFirst();
+  if (!order) throw Errors.notFound("order");
+  if (order.table_session_id !== null) throw Errors.conflict("not_an_online_order");
+  const items = (await getOrderItems(tx, orderId)).filter((i) => i.status === "active");
+  if (items.length === 0) throw Errors.unprocessable("nothing_to_prepare");
+  return createTicket(tx, {
+    tenantId: ctx.tenantId,
+    locationId: ctx.locationId,
+    orderId,
+    orderNo: order.order_no,
+    tableSessionId: null,
+    tableName: null,
+    dueAt: opts.dueAt,
+    source: order.source,
+    items: items.map((i) => ({
+      orderItemId: i.id,
+      nameJa: i.nameJa,
+      nameEn: i.nameEn,
+      quantity: i.quantity,
+      note: i.note,
+    })),
+  });
+}
+
+/** Voids every active line of an order and its kitchen ticket (whole-order cancellation or rejection). */
+export async function voidOrder(
+  tx: Tx,
+  args: { locationId: string; orderId: string; voidedBy: string | null; reason: string },
+): Promise<void> {
+  await tx
+    .updateTable("order_items")
+    .set((eb) => ({
+      status: "voided",
+      voided_at: new Date(),
+      voided_by: args.voidedBy,
+      void_reason: Array.from(args.reason).slice(0, 200).join(""),
+      version: eb("version", "+", 1),
+    }))
+    .where("order_id", "=", args.orderId)
+    .where("location_id", "=", args.locationId)
+    .where("status", "=", "active")
+    .execute();
+  await voidOrderTicket(tx, args.orderId);
+}
+
+/** Active lines of many orders at once, keyed by order id (online order lists). */
+export async function getItemsForOrders(
+  tx: Tx,
+  orderIds: readonly string[],
+): Promise<
+  Map<string, { nameJa: string; nameEn: string | null; quantity: number; note: string | null }[]>
+> {
+  if (orderIds.length === 0) return new Map();
+  const rows = await tx
+    .selectFrom("order_items")
+    .select(["order_id", "name_ja", "name_en", "quantity", "note"])
+    .where("order_id", "in", [...orderIds])
+    .orderBy("created_at")
+    .orderBy("id")
+    .execute();
+  const map = new Map<
+    string,
+    { nameJa: string; nameEn: string | null; quantity: number; note: string | null }[]
+  >();
+  for (const r of rows) {
+    const list = map.get(r.order_id) ?? [];
+    list.push({ nameJa: r.name_ja, nameEn: r.name_en, quantity: r.quantity, note: r.note });
+    map.set(r.order_id, list);
+  }
+  return map;
 }

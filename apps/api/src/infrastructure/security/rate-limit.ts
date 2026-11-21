@@ -19,6 +19,10 @@ export interface RateLimitConfig {
   guestOrderPerSession: RateLimitRule;
   publicReadPerIp: RateLimitRule;
   staffMutationPerSession: RateLimitRule;
+  onlineOrderPerIp: RateLimitRule;
+  onlineOrderPerPhone: RateLimitRule;
+  onlineQuotePerIp: RateLimitRule;
+  onlineTrackingPerIp: RateLimitRule;
 }
 
 export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
@@ -28,6 +32,11 @@ export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
   guestOrderPerSession: { points: 10, durationSeconds: 60 },
   publicReadPerIp: { points: 300, durationSeconds: 60 },
   staffMutationPerSession: { points: 120, durationSeconds: 60 },
+  // Online ordering anti-spam (public, unauthenticated). Phone keys are hashed before use.
+  onlineOrderPerIp: { points: 10, durationSeconds: 600 },
+  onlineOrderPerPhone: { points: 5, durationSeconds: 3600 },
+  onlineQuotePerIp: { points: 60, durationSeconds: 60 },
+  onlineTrackingPerIp: { points: 120, durationSeconds: 60 },
 };
 
 export type Limiter = (key: string) => Promise<void>;
@@ -67,6 +76,10 @@ export function createRateLimiters(
     guestOrderPerSession: make("guestOrderPerSession"),
     publicReadPerIp: make("publicReadPerIp"),
     staffMutationPerSession: make("staffMutationPerSession"),
+    onlineOrderPerIp: make("onlineOrderPerIp"),
+    onlineOrderPerPhone: make("onlineOrderPerPhone"),
+    onlineQuotePerIp: make("onlineQuotePerIp"),
+    onlineTrackingPerIp: make("onlineTrackingPerIp"),
   };
 }
 

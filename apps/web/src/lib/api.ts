@@ -91,3 +91,43 @@ export function errorKey(err: unknown): string {
 
 export const staffApi = createApiClient();
 export const guestApi = createApiClient();
+
+/**
+ * Public online-ordering requests (no session cookie involved). The order-tracking token is sent only in the
+ * `X-Order-Token` header, never in a URL or cookie.
+ */
+export async function publicRequest<T>(
+  method: "GET" | "POST",
+  path: string,
+  opts: { body?: unknown; orderToken?: string; idempotencyKey?: string } = {},
+): Promise<T> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  if (opts.orderToken) headers["X-Order-Token"] = opts.orderToken;
+  if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
+  let res: Response;
+  try {
+    res = await fetch(`/api/v1${path}`, {
+      method,
+      headers,
+      credentials: "omit",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+      ...(opts.body === undefined ? {} : { body: JSON.stringify(opts.body) }),
+    });
+  } catch {
+    throw new ApiError(0, "network_error", "Network error");
+  }
+  if (res.status === 204) return undefined as T;
+  const json: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = (json as ApiErrorBody | null)?.error;
+    throw new ApiError(
+      res.status,
+      err?.code ?? "http_error",
+      err?.message ?? res.statusText,
+      err?.details,
+    );
+  }
+  return json as T;
+}

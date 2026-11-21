@@ -3,6 +3,7 @@ import { type Migration, type MigrationProvider, Migrator } from "kysely/migrati
 import pg from "pg";
 import * as foundation from "./migrations/2026112001_foundation.js";
 import * as dineIn from "./migrations/2026112002_dine_in.js";
+import * as onlineOrdering from "./migrations/2026112003_online_ordering.js";
 
 /** Static provider: migrations are bundled with the build (no filesystem scanning at runtime). */
 class StaticMigrationProvider implements MigrationProvider {
@@ -10,6 +11,7 @@ class StaticMigrationProvider implements MigrationProvider {
     return Promise.resolve({
       "2026112001_foundation": foundation,
       "2026112002_dine_in": dineIn,
+      "2026112003_online_ordering": onlineOrdering,
     });
   }
 }

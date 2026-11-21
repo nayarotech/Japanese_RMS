@@ -13,6 +13,11 @@ export const rooms = {
   user: (tenantId: string, userId: string) => `t:${tenantId}:u:${userId}`,
   /** All sockets of one staff session (for immediate disconnect on logout/revocation). */
   staffSession: (sessionId: string) => `ss:${sessionId}`,
+  /** Staff who handle online orders (online_orders.view). */
+  online: (tenantId: string, locationId: string) => `t:${tenantId}:l:${locationId}:online`,
+  /** Customer tracking ONE online order (tracking-token socket). Receives id-only "refresh" hints. */
+  onlineCustomer: (tenantId: string, onlineOrderId: string) =>
+    `t:${tenantId}:oo:${onlineOrderId}:customer`,
   /** Guests joined to one dining session. Receives id-only "refresh" hints. */
   guestTable: (tenantId: string, tableSessionId: string) =>
     `t:${tenantId}:ts:${tableSessionId}:guest`,

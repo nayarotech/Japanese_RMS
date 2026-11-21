@@ -13,7 +13,7 @@ type NullableTimestamp = ColumnType<
 type Json<T> = ColumnType<T, T, T>;
 
 export type StaffRole = "owner" | "manager" | "cashier" | "waiter" | "kitchen";
-export type OrderSource = "STAFF_POS" | "TABLE_QR";
+export type OrderSource = "STAFF_POS" | "TABLE_QR" | "ONLINE_PICKUP" | "ONLINE_DELIVERY";
 // Status/value types are owned by the domain layer (dependencies point inward).
 import type {
   KitchenItemStatus,
@@ -21,7 +21,14 @@ import type {
 } from "../../modules/kitchen/domain/status.js";
 import type { TaxRounding } from "../../modules/orders/domain/pricing.js";
 import type { TableSessionStatus } from "../../modules/tables/domain/session-rules.js";
+import type {
+  FulfillmentType,
+  OnlineOrderStatus,
+  OnlinePaymentMethod,
+  OnlinePaymentStatus,
+} from "../../modules/online-orders/domain/status.js";
 export type { KitchenItemStatus, KitchenTicketStatus, TableSessionStatus, TaxRounding };
+export type { FulfillmentType, OnlineOrderStatus, OnlinePaymentMethod, OnlinePaymentStatus };
 
 export interface BrandsTable {
   id: Generated<string>;
@@ -230,6 +237,7 @@ export interface MenuItemsTable {
   code: string | null;
   price_yen: number;
   tax_rate_id: string;
+  takeout_tax_rate_id: Generated<string | null>;
   is_available: Generated<boolean>;
   is_active: Generated<boolean>;
   sort_order: Generated<number>;
@@ -248,7 +256,7 @@ export interface OrdersTable {
   id: Generated<string>;
   tenant_id: string;
   location_id: string;
-  table_session_id: string;
+  table_session_id: string | null;
   order_no: number;
   source: OrderSource;
   created_by_user_id: string | null;
@@ -260,7 +268,7 @@ export interface OrderItemsTable {
   tenant_id: string;
   location_id: string;
   order_id: string;
-  table_session_id: string;
+  table_session_id: string | null;
   menu_item_id: string;
   name_ja: string;
   name_en: string | null;
@@ -281,8 +289,10 @@ export interface KitchenTicketsTable {
   tenant_id: string;
   location_id: string;
   order_id: string;
-  table_session_id: string;
-  table_name: string;
+  table_session_id: string | null;
+  table_name: string | null;
+  order_no: number;
+  due_at: NullableTimestamp;
   source: OrderSource;
   status: Generated<KitchenTicketStatus>;
   created_at: Generated<Date>;
@@ -309,7 +319,8 @@ export interface PaymentsTable {
   id: Generated<string>;
   tenant_id: string;
   location_id: string;
-  table_session_id: string;
+  table_session_id: string | null;
+  order_id: Generated<string | null>;
   method: "cash";
   status: Generated<"completed">;
   amount_due_yen: number;
@@ -327,6 +338,132 @@ export interface ReceiptsTable {
   receipt_no: number;
   issued_at: Generated<Date>;
   body: Json<Record<string, unknown>>;
+}
+export interface EntitlementOverridesTable {
+  id: Generated<string>;
+  tenant_id: string;
+  location_id: string;
+  feature_key: string;
+  effect: "grant" | "revoke";
+  reason: string;
+  granted_by: string;
+  starts_at: Timestamp;
+  expires_at: NullableTimestamp;
+  revoked_at: NullableTimestamp;
+  created_at: Generated<Date>;
+}
+export interface OnlineOrderingSettingsTable {
+  location_id: string;
+  tenant_id: string;
+  is_enabled: Generated<boolean>;
+  is_paused: Generated<boolean>;
+  pickup_enabled: Generated<boolean>;
+  delivery_enabled: Generated<boolean>;
+  pay_at_handover_enabled: Generated<boolean>;
+  pickup_prep_minutes: Generated<number>;
+  pickup_slot_minutes: Generated<number>;
+  pickup_days_ahead: Generated<number>;
+  delivery_prep_minutes: Generated<number>;
+  min_order_yen: Generated<number>;
+  store_latitude: number | null;
+  store_longitude: number | null;
+  checkout_note_ja: string | null;
+  checkout_note_en: string | null;
+  version: Generated<number>;
+  updated_at: Generated<Date>;
+  updated_by: string | null;
+}
+export interface OnlineOrderingHoursTable {
+  id: Generated<string>;
+  tenant_id: string;
+  location_id: string;
+  weekday: number;
+  opens_at: string;
+  closes_at: string;
+}
+export interface DeliveryFeeTiersTable {
+  id: Generated<string>;
+  tenant_id: string;
+  location_id: string;
+  max_distance_m: number;
+  fee_yen: number;
+  min_order_yen: Generated<number>;
+}
+export interface OnlineStoreLinksTable {
+  token: string;
+  tenant_id: string;
+  location_id: string;
+  issued_at: Generated<Date>;
+  revoked_at: NullableTimestamp;
+}
+export interface OnlineOrdersTable {
+  id: Generated<string>;
+  tenant_id: string;
+  location_id: string;
+  order_id: string;
+  order_no: number;
+  fulfillment_type: FulfillmentType;
+  status: Generated<OnlineOrderStatus>;
+  payment_method: OnlinePaymentMethod;
+  payment_status: Generated<OnlinePaymentStatus>;
+  scheduled_for: Timestamp;
+  items_subtotal_yen: number;
+  delivery_fee_yen: Generated<number>;
+  tax_total_yen: number;
+  total_yen: number;
+  tax_breakdown: Json<{ rateBp: number; baseYen: number; taxYen: number }[]>;
+  prices_include_tax: boolean;
+  delivery_distance_m: number | null;
+  rejection_reason: string | null;
+  cancellation_reason: string | null;
+  cancelled_by: "staff" | "customer" | null;
+  accepted_at: NullableTimestamp;
+  ready_at: NullableTimestamp;
+  dispatched_at: NullableTimestamp;
+  finished_at: NullableTimestamp;
+  version: Generated<number>;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
+}
+export interface OnlineOrderContactsTable {
+  online_order_id: string;
+  tenant_id: string;
+  location_id: string;
+  name: string;
+  phone: string;
+  email: string | null;
+  postal_code: string | null;
+  prefecture: string | null;
+  city: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  delivery_instructions: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geocode_precision: string | null;
+  created_at: Generated<Date>;
+}
+export interface OnlineOrderStatusHistoryTable {
+  id: Generated<string>;
+  tenant_id: string;
+  location_id: string;
+  online_order_id: string;
+  from_status: OnlineOrderStatus | null;
+  to_status: OnlineOrderStatus;
+  actor_type: "staff" | "customer" | "system";
+  actor_id: string | null;
+  reason: string | null;
+  created_at: Generated<Date>;
+}
+export interface OnlineOrderTrackingTokensTable {
+  id: Generated<string>;
+  token_hash: Buffer;
+  tenant_id: string;
+  location_id: string;
+  online_order_id: string;
+  created_at: Generated<Date>;
+  expires_at: Timestamp;
+  revoked_at: NullableTimestamp;
 }
 
 export interface Database {
@@ -360,6 +497,15 @@ export interface Database {
   kitchen_ticket_items: KitchenTicketItemsTable;
   payments: PaymentsTable;
   receipts: ReceiptsTable;
+  entitlement_overrides: EntitlementOverridesTable;
+  online_ordering_settings: OnlineOrderingSettingsTable;
+  online_ordering_hours: OnlineOrderingHoursTable;
+  delivery_fee_tiers: DeliveryFeeTiersTable;
+  online_store_links: OnlineStoreLinksTable;
+  online_orders: OnlineOrdersTable;
+  online_order_contacts: OnlineOrderContactsTable;
+  online_order_status_history: OnlineOrderStatusHistoryTable;
+  online_order_tracking_tokens: OnlineOrderTrackingTokensTable;
 }
 
 export type NewRow<T extends keyof Database> = Insertable<Database[T]>;

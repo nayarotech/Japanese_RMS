@@ -11,6 +11,11 @@ import { identityRoutes } from "./modules/identity/http/routes.js";
 import { requireStaff } from "./modules/identity/http/middleware.js";
 import { kitchenRoutes } from "./modules/kitchen/http/routes.js";
 import { menuRoutes } from "./modules/menus/http/routes.js";
+import {
+  onlineOrderPublicRoutes,
+  onlineOrderStaffRoutes,
+  syncOnlineOrderFromKitchen,
+} from "./modules/online-orders/index.js";
 import { orderRoutes } from "./modules/orders/http/routes.js";
 import { paymentRoutes } from "./modules/payments/http/routes.js";
 import { qrOrderingRoutes } from "./modules/qr-ordering/http/routes.js";
@@ -63,13 +68,16 @@ export function createApp(
   });
   api.use(identityRoutes(deps));
   api.use(qrOrderingRoutes(deps));
+  api.use(onlineOrderPublicRoutes(deps));
   // Everything below requires an authenticated staff session (and CSRF on mutations).
   api.use(requireStaff(deps));
   api.use(tableRoutes(deps));
   api.use(menuRoutes(deps));
   api.use(orderRoutes(deps));
-  api.use(kitchenRoutes(deps));
+  // Kitchen progress on an online order's ticket drives that order's status (injected: no kitchen -> online-orders import).
+  api.use(kitchenRoutes(deps, { afterOnlineTicketChange: syncOnlineOrderFromKitchen }));
   api.use(paymentRoutes(deps));
+  api.use(onlineOrderStaffRoutes(deps));
 
   app.use("/api/v1", api);
   app.use((_req, _res, next) => {

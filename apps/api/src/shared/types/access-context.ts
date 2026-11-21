@@ -24,3 +24,17 @@ export interface GuestContext {
   requestId: string;
   ip: string | null;
 }
+
+/**
+ * An anonymous online-ordering customer (no account). Before submission it is identified by nothing; afterwards only
+ * by a revocable, expiring order-tracking token that is scoped to exactly ONE online order.
+ */
+export interface CustomerContext {
+  kind: "customer";
+  tenantId: string;
+  locationId: string;
+  onlineOrderId: string | null;
+  trackingTokenId: string | null;
+  requestId: string;
+  ip: string | null;
+}

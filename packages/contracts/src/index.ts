@@ -5,7 +5,7 @@
 
 export type Locale = "ja" | "en";
 export type StaffRole = "owner" | "manager" | "cashier" | "waiter" | "kitchen";
-export type OrderSource = "STAFF_POS" | "TABLE_QR";
+export type OrderSource = "STAFF_POS" | "TABLE_QR" | "ONLINE_PICKUP" | "ONLINE_DELIVERY";
 export type TableSessionStatus = "open" | "bill_requested" | "closed";
 export type KitchenItemStatus = "queued" | "preparing" | "ready" | "served" | "voided";
 export type KitchenTicketStatus = "new" | "preparing" | "ready" | "served" | "voided";
@@ -45,6 +45,10 @@ export interface MenuItemDto {
   description: { ja: string | null; en: string | null };
   priceYen: number;
   taxRateBp: number;
+  taxRateId: string;
+  /** Takeout/delivery tax rate (null = same as dine-in). */
+  takeoutTaxRateId: string | null;
+  takeoutTaxRateBp: number;
   isAvailable: boolean;
   isActive: boolean;
   sortOrder: number;
@@ -163,8 +167,12 @@ export interface KitchenItemDto {
 export interface KitchenTicketDto {
   id: string;
   orderId: string;
-  tableSessionId: string;
-  tableName: string;
+  orderNo: number;
+  /** Null for online (pickup/delivery) tickets, which are shown by order number. */
+  tableSessionId: string | null;
+  tableName: string | null;
+  /** Pickup time / estimated delivery time for online tickets. */
+  dueAt: string | null;
   source: OrderSource;
   status: KitchenTicketStatus;
   createdAt: string;
@@ -288,5 +296,249 @@ export const REALTIME_EVENTS = [
   "waiter.food.ready",
   "waiter.food.served",
   "checkout.completed",
+  "online.order.created",
+  "online.order.accepted",
+  "online.order.rejected",
+  "online.order.cancelled",
+  "online.order.preparing",
+  "online.order.ready",
+  "online.order.dispatched",
+  "online.order.delivered",
+  "online.order.completed",
+  "online.order.payment_recorded",
 ] as const;
 export type RealtimeEvent = (typeof REALTIME_EVENTS)[number];
+
+// ---------------------------------------------------------------- online ordering (pickup / delivery)
+
+export type FulfillmentType = "pickup" | "delivery";
+export type OnlineOrderStatus =
+  | "pending_acceptance"
+  | "accepted"
+  | "preparing"
+  | "ready"
+  | "out_for_delivery"
+  | "delivered"
+  | "completed"
+  | "rejected"
+  | "cancelled";
+export type OnlinePaymentMethod = "pay_on_pickup" | "cash_on_delivery";
+export type OnlinePaymentStatus = "unpaid" | "paid" | "refund_required" | "voided";
+export type StoreState = "open" | "paused" | "closed" | "unavailable";
+
+export type RejectionReason =
+  "store_busy" | "item_unavailable" | "outside_hours" | "cannot_deliver" | "other";
+export type CancellationReason =
+  "customer_request" | "no_show" | "cannot_fulfill" | "delivery_failed" | "other";
+
+export interface HoursWindowDto {
+  weekday: number; // 0 = Sunday
+  opensAt: string; // "HH:MM"
+  closesAt: string; // "HH:MM" ("24:00" = end of day)
+}
+
+export interface FeeTierDto {
+  maxDistanceM: number;
+  feeYen: number;
+  minOrderYen: number;
+}
+
+export interface TaxBreakdownDto {
+  rateBp: number;
+  baseYen: number;
+  taxYen: number;
+}
+
+export interface StorefrontResponse {
+  brand: PublicBrand;
+  location: { name: string; timeZone: string };
+  state: StoreState;
+  hours: HoursWindowDto[];
+  minOrderYen?: number;
+  checkoutNote?: { ja: string | null; en: string | null };
+  pricesIncludeTax?: boolean;
+  pickup: { prepMinutes: number; slots: string[]; paymentMethod: OnlinePaymentMethod } | null;
+  delivery: {
+    prepMinutes: number;
+    radiusM: number;
+    tiers: FeeTierDto[];
+    distanceBasis: "straight_line";
+    paymentMethod: OnlinePaymentMethod;
+  } | null;
+  menu: PublicTableResponse["menu"];
+}
+
+export interface DeliveryAddressInput {
+  postalCode: string;
+  prefecture: string;
+  city: string;
+  line1: string;
+  line2?: string | null;
+  instructions?: string | null;
+}
+
+export interface OnlineQuoteDto {
+  itemsSubtotalYen: number;
+  deliveryFeeYen: number;
+  taxBreakdown: TaxBreakdownDto[];
+  taxTotalYen: number;
+  totalYen: number;
+  pricesIncludeTax: boolean;
+  minimumYen: number;
+  meetsMinimum: boolean;
+  deliveryDistanceM: number | null;
+}
+
+export interface OnlineOrderPlacedDto {
+  onlineOrderId: string;
+  orderNo: number;
+  status: OnlineOrderStatus;
+  fulfillmentType: FulfillmentType;
+  scheduledFor: string;
+  totalYen: number;
+  trackingToken: string;
+}
+
+export interface OnlineTrackingDto {
+  store: { name: string; timeZone: string };
+  brand: PublicBrand;
+  onlineOrderId: string;
+  orderNo: number;
+  fulfillmentType: FulfillmentType;
+  status: OnlineOrderStatus;
+  paymentMethod: OnlinePaymentMethod;
+  paymentStatus: OnlinePaymentStatus;
+  scheduledFor: string;
+  createdAt: string;
+  rejectionReason: string | null;
+  cancellationReason: string | null;
+  cancelledBy: "staff" | "customer" | null;
+  canCancel: boolean;
+  items: {
+    id: string;
+    nameJa: string;
+    nameEn: string | null;
+    quantity: number;
+    note: string | null;
+    unitPriceYen: number;
+    lineTotalYen: number;
+  }[];
+  totals: {
+    itemsSubtotalYen: number;
+    deliveryFeeYen: number;
+    taxBreakdown: TaxBreakdownDto[];
+    taxTotalYen: number;
+    totalYen: number;
+    pricesIncludeTax: boolean;
+  };
+}
+
+export interface OnlineOrderSummaryDto {
+  id: string;
+  orderNo: number;
+  fulfillmentType: FulfillmentType;
+  status: OnlineOrderStatus;
+  paymentMethod: OnlinePaymentMethod;
+  paymentStatus: OnlinePaymentStatus;
+  scheduledFor: string;
+  createdAt: string;
+  totalYen: number;
+  deliveryDistanceM: number | null;
+  version: number;
+  items: { nameJa: string; nameEn: string | null; quantity: number; note: string | null }[];
+}
+
+export interface OnlineOrderListResponse {
+  orders: OnlineOrderSummaryDto[];
+  ordering: { enabled: boolean; paused: boolean };
+}
+
+export interface OnlineOrderDetailDto {
+  id: string;
+  orderId: string;
+  orderNo: number;
+  fulfillmentType: FulfillmentType;
+  status: OnlineOrderStatus;
+  paymentMethod: OnlinePaymentMethod;
+  paymentStatus: OnlinePaymentStatus;
+  scheduledFor: string;
+  createdAt: string;
+  itemsSubtotalYen: number;
+  deliveryFeeYen: number;
+  taxTotalYen: number;
+  totalYen: number;
+  taxBreakdown: TaxBreakdownDto[];
+  pricesIncludeTax: boolean;
+  deliveryDistanceM: number | null;
+  rejectionReason: string | null;
+  cancellationReason: string | null;
+  cancelledBy: "staff" | "customer" | null;
+  version: number;
+  items: {
+    id: string;
+    nameJa: string;
+    nameEn: string | null;
+    quantity: number;
+    note: string | null;
+    unitPriceYen: number;
+    lineTotalYen: number;
+    taxRateBp: number;
+    status: "active" | "voided";
+    kitchenStatus: KitchenItemStatus | null;
+  }[];
+  history: {
+    from: OnlineOrderStatus | null;
+    to: OnlineOrderStatus;
+    actorType: "staff" | "customer" | "system";
+    reason: string | null;
+    at: string;
+  }[];
+  payment: {
+    paymentId: string;
+    method: "cash";
+    amountDueYen: number;
+    amountReceivedYen: number;
+    changeYen: number;
+    recordedAt: string;
+  } | null;
+  canViewContact: boolean;
+}
+
+export interface OnlineOrderContactDto {
+  name: string;
+  phone: string;
+  email: string | null;
+  address: {
+    postalCode: string | null;
+    prefecture: string | null;
+    city: string | null;
+    line1: string | null;
+    line2: string | null;
+    instructions: string | null;
+  } | null;
+}
+
+export interface OnlineSettingsDto {
+  enabled: boolean;
+  paused: boolean;
+  pickupEnabled: boolean;
+  deliveryEnabled: boolean;
+  payAtHandoverEnabled: boolean;
+  pickupPrepMinutes: number;
+  pickupSlotMinutes: number;
+  pickupDaysAhead: number;
+  deliveryPrepMinutes: number;
+  minOrderYen: number;
+  storeLocation: { latitude: number; longitude: number } | null;
+  checkoutNote: { ja: string | null; en: string | null };
+}
+
+export interface OnlineSettingsResponse {
+  version: number;
+  settings: OnlineSettingsDto;
+  hours: HoursWindowDto[];
+  tiers: FeeTierDto[];
+  link: { token: string; issuedAt: string };
+  features: { pickup: boolean; delivery: boolean };
+  geocoderEnabled: boolean;
+}

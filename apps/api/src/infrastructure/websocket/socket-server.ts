@@ -10,12 +10,26 @@ import type { Redis } from "ioredis";
 import { Server, type Socket } from "socket.io";
 import type { AppDeps } from "../../app/deps.js";
 import { authenticateStaff } from "../../modules/identity/application/sessions.js";
+import { authenticateTrackingToken } from "../../modules/online-orders/index.js";
 import { authenticateGuest } from "../../modules/qr-ordering/index.js";
-import type { GuestContext, StaffContext } from "../../shared/types/access-context.js";
+import type {
+  CustomerContext,
+  GuestContext,
+  StaffContext,
+} from "../../shared/types/access-context.js";
 import { cookieNames } from "../security/cookies.js";
 import { rooms } from "./rooms.js";
 
 const REVALIDATE_MS = 30_000;
+
+type Principal = StaffContext | GuestContext | CustomerContext;
+
+/** Online-order tracking sockets send their token in the handshake `auth` payload (they have no cookie). */
+function orderTokenOf(socket: Socket): string | undefined {
+  const auth = socket.handshake.auth as Record<string, unknown> | undefined;
+  const t = auth?.["orderToken"];
+  return typeof t === "string" ? t : undefined;
+}
 
 export interface RealtimeControl {
   io: Server;
@@ -48,15 +62,18 @@ export function createSocketServer(
       const meta = { ip: socket.handshake.address || null, requestId: `ws-${socket.id}` };
       const staffToken = cookies[names.staff];
       const guestToken = cookies[names.guest];
-      // Staff credential first; fall back to the guest credential (a stale staff cookie must not block a guest).
-      const staffPrincipal = staffToken ? await authenticateStaff(deps, staffToken, meta) : null;
-      const principal: StaffContext | GuestContext | null =
-        staffPrincipal ?? (guestToken ? await authenticateGuest(deps.db, guestToken, meta) : null);
+      const orderToken = orderTokenOf(socket);
+      // An explicit order-tracking token wins (that socket only ever tracks one order). Otherwise staff first, then
+      // guest (a stale staff cookie must not block a guest).
+      const principal: Principal | null = orderToken
+        ? await authenticateTrackingToken(deps.db, orderToken, meta)
+        : ((staffToken ? await authenticateStaff(deps, staffToken, meta) : null) ??
+          (guestToken ? await authenticateGuest(deps.db, guestToken, meta) : null));
       if (!principal) {
         next(new Error("unauthenticated"));
         return;
       }
-      (socket.data as { principal: StaffContext | GuestContext }).principal = principal;
+      (socket.data as { principal: Principal }).principal = principal;
       next();
     })().catch((err: unknown) => {
       deps.logger.error({ err }, "socket auth failed");
@@ -65,14 +82,17 @@ export function createSocketServer(
   });
 
   io.on("connection", (socket) => {
-    const principal = (socket.data as { principal: StaffContext | GuestContext }).principal;
+    const principal = (socket.data as { principal: Principal }).principal;
     void socket.join(roomsFor(principal));
     socket.emit("session.ready", { kind: principal.kind });
 
     // Periodic re-validation: logout, membership removal, checkout or expiry ends the socket.
-    const token = parseCookie(socket.handshake.headers.cookie ?? "")[
-      principal.kind === "staff" ? names.staff : names.guest
-    ];
+    const token =
+      principal.kind === "customer"
+        ? orderTokenOf(socket)
+        : parseCookie(socket.handshake.headers.cookie ?? "")[
+            principal.kind === "staff" ? names.staff : names.guest
+          ];
     const timer = setInterval(() => {
       void revalidate(deps, socket, principal.kind, token).catch(() => socket.disconnect(true));
     }, REVALIDATE_MS);
@@ -90,26 +110,30 @@ export function createSocketServer(
   };
 }
 
-export function roomsFor(p: StaffContext | GuestContext): string[] {
+export function roomsFor(p: Principal): string[] {
   if (p.kind === "guest") return [rooms.guestTable(p.tenantId, p.tableSessionId)];
+  if (p.kind === "customer")
+    return p.onlineOrderId ? [rooms.onlineCustomer(p.tenantId, p.onlineOrderId)] : [];
   const list = [rooms.user(p.tenantId, p.userId), rooms.staffSession(p.sessionId)];
   if (p.permissions.has("tables.view")) list.push(rooms.staff(p.tenantId, p.locationId));
   if (p.permissions.has("kitchen.view")) list.push(rooms.kitchen(p.tenantId, p.locationId));
   if (p.permissions.has("floor.serve")) list.push(rooms.floor(p.tenantId, p.locationId));
+  if (p.permissions.has("online_orders.view")) list.push(rooms.online(p.tenantId, p.locationId));
   return list;
 }
 
 async function revalidate(
   deps: AppDeps,
   socket: Socket,
-  kind: "staff" | "guest",
+  kind: Principal["kind"],
   token: string | undefined,
 ): Promise<void> {
   const meta = { ip: null, requestId: `ws-${socket.id}` };
-  const ok = token
-    ? kind === "staff"
-      ? await authenticateStaff(deps, token, meta)
-      : await authenticateGuest(deps.db, token, meta)
-    : null;
+  let ok: Principal | null = null;
+  if (token) {
+    if (kind === "staff") ok = await authenticateStaff(deps, token, meta);
+    else if (kind === "guest") ok = await authenticateGuest(deps.db, token, meta);
+    else ok = await authenticateTrackingToken(deps.db, token, meta);
+  }
   if (!ok) socket.disconnect(true);
 }

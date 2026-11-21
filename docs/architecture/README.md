@@ -19,6 +19,8 @@ section explicitly says "created", nothing described here is implemented, tested
 | -   | [11-localization.md](11-localization.md)                                     | Japanese/English, JPY, time zone, business day, tax caveats           |
 | -   | [12-testing-strategy.md](12-testing-strategy.md)                             | Test types, tools, the cross-tenant test policy                       |
 | -   | [13-tech-stack.md](13-tech-stack.md)                                         | Chosen versions and the reasons for each choice                       |
+| -   | [14-dine-in-workflow.md](14-dine-in-workflow.md)                             | Implemented: dine-in workflow (Basic package)                         |
+| -   | [15-online-ordering.md](15-online-ordering.md)                               | Implemented: online ordering, pickup and delivery (Standard package)  |
 
 Decisions with lasting consequences are recorded as ADRs in [../decisions/](../decisions/README.md).
 

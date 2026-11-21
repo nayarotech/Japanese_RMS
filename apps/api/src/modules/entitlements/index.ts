@@ -1,14 +1,19 @@
 /**
  * entitlements: "is feature X available to this location right now?" in ONE place.
  *
- * - FEATURE_REGISTRY lists implemented features. A plan row naming an unknown key grants nothing.
+ * - FEATURE_REGISTRY lists implemented features. A plan row or override naming an unknown key grants nothing.
+ * - Effective features = (plan features ∪ active grants) − active revokes, ∩ registry, then the access policy.
  * - Access policy maps subscription status to an access mode, never raw payment state.
  * - Fails closed: no subscription or a resolution error means the gated action is denied.
  * - Enforced server-side for HTTP, WebSocket-triggered use cases, jobs and public QR flows.
  */
 import type { Tx } from "../../infrastructure/database/db.js";
 import { Errors } from "../../shared/errors/app-error.js";
-import { getCurrentPlanFeatures, type SubscriptionStatus } from "../subscriptions/index.js";
+import {
+  getActiveOverrides,
+  getCurrentPlanFeatures,
+  type SubscriptionStatus,
+} from "../subscriptions/index.js";
 
 /** Implemented, shared features. One implementation each, used by every plan that includes it. */
 export const FEATURE_REGISTRY = [
@@ -17,6 +22,10 @@ export const FEATURE_REGISTRY = [
   "table_qr_ordering",
   "kitchen_workflow",
   "cash_checkout",
+  // Standard package and above: online ordering storefront, pickup, delivery.
+  "online_ordering",
+  "pickup_ordering",
+  "delivery_management",
 ] as const;
 export type FeatureKey = (typeof FEATURE_REGISTRY)[number];
 
@@ -53,7 +62,11 @@ export async function resolveEntitlements(
       status: current?.status ?? null,
     };
   }
-  const features = new Set(current.featureKeys.filter((k): k is FeatureKey => REGISTRY.has(k)));
+  const keys = new Set(current.featureKeys);
+  const overrides = await getActiveOverrides(tx, locationId);
+  for (const o of overrides) if (o.effect === "grant") keys.add(o.featureKey);
+  for (const o of overrides) if (o.effect === "revoke") keys.delete(o.featureKey); // revoke wins
+  const features = new Set([...keys].filter((k): k is FeatureKey => REGISTRY.has(k)));
   return { features, planCode: current.planCode, status: current.status };
 }
 

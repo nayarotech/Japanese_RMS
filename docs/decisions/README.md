@@ -11,5 +11,8 @@ ADRs are immutable once **Accepted**. To change a decision, write a new ADR that
 | [0004](0004-outbox-and-postgres-jobs.md)                 | Transactional outbox and PostgreSQL-backed jobs                                 | Proposed |
 | [0005](0005-worker-imports-api-job-handlers.md)          | Worker reuses API module code via an explicit export                            | Proposed |
 | [0006](0006-authentication-library.md)                   | Authentication library selection                                                | Open     |
+| [0007](0007-kitchen-module-in-scope.md)                  | Bring a basic kitchen workflow into the initial release                         | Accepted |
+| [0008](0008-qr-join-code.md)                             | QR ordering: scan-to-order (no join code, no staff step)                        | Accepted |
+| [0009](0009-online-orders-reuse-order-domain.md)         | Online orders reuse the order domain; online rules live in `online-orders`      | Accepted |
 
 All Phase 0 ADRs are **Proposed** until the architecture is approved.

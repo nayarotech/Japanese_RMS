@@ -56,6 +56,11 @@ const EnvSchema = z.object({
   SHUTDOWN_GRACE_PERIOD_MS: z.coerce.number().int().min(0).default(25000),
 
   DEFAULT_LOCALE: z.enum(["ja", "en"]).default("ja"),
+
+  // Address geocoding for delivery-area checks. No paid provider is selected yet (docs/architecture/15-online-ordering.md):
+  // "disabled" = delivery orders are refused (fail closed); "static_demo" = built-in demo postal codes (dev/test only).
+  GEOCODER_PROVIDER: z.enum(["disabled", "static_demo"]).default("disabled"),
+  GEOCODER_TIMEOUT_MS: z.coerce.number().int().min(200).max(10_000).default(3000),
   DEFAULT_TIME_ZONE: z.string().default("Asia/Tokyo"),
 });
 
@@ -81,6 +86,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       problems.push("DATABASE_SSL_MODE must be verify-full");
     if (cfg.LOG_PRETTY) problems.push("LOG_PRETTY must be false");
     if (!cfg.REDIS_TLS) problems.push("REDIS_TLS must be true");
+    if (cfg.GEOCODER_PROVIDER === "static_demo")
+      problems.push("GEOCODER_PROVIDER=static_demo is for development and tests only");
     if (problems.length > 0)
       throw new ConfigError(`Unsafe ${cfg.APP_ENV} configuration: ${problems.join("; ")}`);
   }

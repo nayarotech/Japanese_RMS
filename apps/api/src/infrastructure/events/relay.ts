@@ -41,6 +41,12 @@ export function routeEvent(row: OutboxRow): Delivery[] {
   const guest = tableSessionId
     ? [{ rooms: [rooms.guestTable(t, tableSessionId)], payload: { tableSessionId } }]
     : [];
+  const onlineOrderId = typeof p["onlineOrderId"] === "string" ? p["onlineOrderId"] : null;
+  const onlineStaff = onlineOrderId ? [{ rooms: [rooms.online(t, l)], payload: p }] : [];
+  // Customers get an id-only refresh hint for THEIR order only.
+  const onlineCustomer = onlineOrderId
+    ? [{ rooms: [rooms.onlineCustomer(t, onlineOrderId)], payload: { onlineOrderId } }]
+    : [];
 
   switch (row.event_type as DomainEventType) {
     case "table.session.opened":
@@ -66,6 +72,18 @@ export function routeEvent(row: OutboxRow): Delivery[] {
     }
     case "waiter.food.served":
       return [{ rooms: [floor, kitchen, staff], payload: p }];
+    case "online.order.created": // the customer placed it; staff need to accept it
+      return onlineStaff;
+    case "online.order.accepted":
+    case "online.order.rejected":
+    case "online.order.cancelled":
+    case "online.order.preparing":
+    case "online.order.ready":
+    case "online.order.dispatched":
+    case "online.order.delivered":
+    case "online.order.completed":
+    case "online.order.payment_recorded":
+      return [...onlineStaff, ...onlineCustomer];
     default:
       return [];
   }

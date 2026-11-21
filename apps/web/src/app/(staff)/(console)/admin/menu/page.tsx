@@ -43,6 +43,7 @@ export default function AdminMenuPage() {
       staffApi.send("POST", "/menu/items", {
         categoryId: field(f, "categoryId"),
         taxRateId: field(f, "taxRateId"),
+        takeoutTaxRateId: field(f, "takeoutTaxRateId") || null,
         priceYen: Number(field(f, "priceYen")),
         nameJa: field(f, "nameJa"),
         nameEn: field(f, "nameEn") || null,
@@ -82,7 +83,10 @@ export default function AdminMenuPage() {
                           ) : null}
                         </p>
                         <p className="text-[12px] text-muted">
-                          {t("pos.tax", { rate: ratePercent(i.taxRateBp) })}
+                          {t("adminMenu.taxSummary", {
+                            dineIn: ratePercent(i.taxRateBp),
+                            takeout: ratePercent(i.takeoutTaxRateBp),
+                          })}
                         </p>
                       </div>
                       <span className="w-24 text-right text-[15px] font-semibold">
@@ -162,6 +166,21 @@ export default function AdminMenuPage() {
                 name="taxRateId"
                 className="mt-1 h-11 w-full rounded-[10px] border border-line px-3"
               >
+                {menu.taxRates.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {ratePercent(r.rateBp)}% ({r.code})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-[14px] font-medium">
+              {t("adminMenu.takeoutTax")}
+              <select
+                name="takeoutTaxRateId"
+                defaultValue=""
+                className="mt-1 h-11 w-full rounded-[10px] border border-line px-3"
+              >
+                <option value="">{t("adminMenu.sameAsDineIn")}</option>
                 {menu.taxRates.map((r) => (
                   <option key={r.id} value={r.id}>
                     {ratePercent(r.rateBp)}% ({r.code})

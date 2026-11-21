@@ -21,6 +21,13 @@ export const PERMISSIONS = [
   "floor.serve",
   "checkout.perform",
   "receipts.view",
+  // Online ordering (pickup/delivery)
+  "online_orders.view", // see incoming and active online orders
+  "online_orders.manage", // accept / reject
+  "online_orders.fulfill", // hand over a pickup, dispatch and deliver
+  "online_orders.cancel", // cancel an accepted order (manager decision)
+  "online_orders.contact_view", // customer name, phone and delivery address
+  "online_settings.manage", // ordering hours, delivery area, pause/resume, storefront link
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -38,6 +45,10 @@ export const ROLE_PERMISSIONS: Record<StaffRole, readonly Permission[]> = {
     "floor.view",
     "checkout.perform",
     "receipts.view",
+    "online_orders.view",
+    "online_orders.manage",
+    "online_orders.fulfill",
+    "online_orders.contact_view",
   ],
   waiter: [
     "tables.view",
@@ -47,6 +58,9 @@ export const ROLE_PERMISSIONS: Record<StaffRole, readonly Permission[]> = {
     "orders.edit",
     "floor.view",
     "floor.serve",
+    "online_orders.view",
+    "online_orders.fulfill",
+    "online_orders.contact_view",
   ],
   kitchen: ["kitchen.view", "kitchen.update", "menu.view"],
 };

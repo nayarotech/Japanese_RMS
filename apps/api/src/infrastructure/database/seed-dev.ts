@@ -41,6 +41,8 @@ try {
       slug: "demo",
       password: DEV_PASSWORD,
       brandHost: "localhost",
+      planCode: "standard", // includes online ordering (pickup + delivery)
+      online: true,
     });
     process.stdout.write(
       `Seeded demo tenant ${f.tenantId}\n` +
@@ -49,7 +51,9 @@ try {
           .map((u) => u.email)
           .join(", ")} (password: see seed-dev.ts)\n` +
         `  tables: ${String(f.tables.length)}, menu items: ${String(f.menu.length)}\n` +
-        `  guest QR example (${f.tables[2]?.name ?? ""}): http://localhost:3000/t/${f.tables[2]?.qrToken ?? ""}\n`,
+        `  guest QR example (${f.tables[2]?.name ?? ""}): http://localhost:3000/t/${f.tables[2]?.qrToken ?? ""}\n` +
+        `  online ordering link: http://localhost:3000/order/${f.storeToken ?? ""}\n` +
+        `  demo delivery postal codes: 1500002 (free), 1510053 (¥300), 1000005 (outside the area)\n`,
     );
   }
 } finally {

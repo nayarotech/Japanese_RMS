@@ -1,7 +1,7 @@
 # restaurant-platform
 
 Multi-tenant, white-label restaurant management platform for the Japanese market: table management, QR ordering,
-POS, kitchen display, waiter app and cash checkout.
+POS, kitchen display, waiter app, cash checkout, and online ordering with pickup and delivery.
 
 > `restaurant-platform` is a neutral internal name. The customer-facing product name, logo and colors come from the
 > brand configuration at runtime and are never hard-coded. See [docs/architecture/05-white-label-branding.md](docs/architecture/05-white-label-branding.md).
@@ -14,6 +14,16 @@ POS, kitchen display, waiter app and cash checkout.
 4. The kitchen marks items ready one by one, and the waiter gets a live "food ready" alert and marks them served.
 5. Guests can keep ordering on the same table, and the cashier sees one combined bill.
 6. Cash checkout with change calculation and a receipt. The table becomes free again.
+
+## Phase 2: online ordering, pickup and delivery (Standard package)
+
+1. Customers open the restaurant's ordering link (no account), add dishes with per-item notes, and choose **pickup** (a time slot) or
+   **delivery** (address checked on the server: distance, fee, minimum).
+2. The order appears live on the **Online** screen. Staff accept it (it goes to the same kitchen display) or decline it with a reason.
+3. Kitchen progress updates the order; the customer follows it on a status page.
+4. Pickup: hand over and take the cash in one step. Delivery: dispatch, mark delivered, and record the cash separately
+   (delivered never means paid).
+5. Managers configure hours, pickup timing, minimums, the delivery area and fees, and can pause ordering. Basic plans cannot use any of it.
 
 Japanese and English UI. All prices, tax and totals are calculated on the server.
 
@@ -67,7 +77,12 @@ pnpm --filter @restaurant-platform/api db:reset   # creates roles, schema and ta
 pnpm --filter @restaurant-platform/api db:seed    # demo store, staff accounts, 12 tables, menu
 ```
 
-The seed prints a guest QR link for table A-3 (`http://localhost:3000/t/...`).
+The seed prints a guest QR link for table A-3 (`http://localhost:3000/t/...`) and the online ordering link
+(`http://localhost:3000/order/...`). The demo store is on the Standard plan. Delivery uses built-in demo postal codes
+(`GEOCODER_PROVIDER=static_demo`, local only): `1500002` (free), `1510053` (¥300), `1000005` (outside the area).
+
+Already have a database from Phase 1? Run `pnpm --filter @restaurant-platform/api db:migrate` (keeps your data), or
+reset and re-seed to get the online demo setup.
 
 ### 4. Start the apps (3 terminals)
 
@@ -85,16 +100,19 @@ pnpm --filter @restaurant-platform/web dev       # Frontend → http://localhost
 - **Guest:** open the QR link printed by the seed, or go to **Table QR** → select a table → _Preview customer screen_.
   Use a private window or a phone so the guest and staff sessions don't mix.
 
-| Screen               | Path                   | Who                             |
-| -------------------- | ---------------------- | ------------------------------- |
-| Table map            | `/tables`              | owner, manager, cashier, waiter |
-| POS / order entry    | `/pos/:sessionId`      | owner, manager, cashier, waiter |
-| Checkout             | `/checkout/:sessionId` | owner, manager, cashier         |
-| Kitchen              | `/kitchen`             | owner, manager, kitchen         |
-| Floor (waiter phone) | `/floor`               | owner, manager, waiter          |
-| Table QR codes       | `/admin/tables`        | owner, manager                  |
-| Menu                 | `/admin/menu`          | owner, manager                  |
-| Guest menu           | `/t/:qrToken`          | customers                       |
+| Screen               | Path                   | Who                                                        |
+| -------------------- | ---------------------- | ---------------------------------------------------------- |
+| Table map            | `/tables`              | owner, manager, cashier, waiter                            |
+| POS / order entry    | `/pos/:sessionId`      | owner, manager, cashier, waiter                            |
+| Checkout             | `/checkout/:sessionId` | owner, manager, cashier                                    |
+| Kitchen              | `/kitchen`             | owner, manager, kitchen                                    |
+| Floor (waiter phone) | `/floor`               | owner, manager, waiter                                     |
+| Table QR codes       | `/admin/tables`        | owner, manager                                             |
+| Menu                 | `/admin/menu`          | owner, manager                                             |
+| Online orders        | `/online`              | owner, manager, cashier, waiter (settings: owner, manager) |
+| Guest menu           | `/t/:qrToken`          | customers                                                  |
+| Online ordering      | `/order/:storeToken`   | customers                                                  |
+| Order status         | `/order/status#token`  | customers (link shown after ordering)                      |
 
 ### Stop / reset
 
@@ -107,7 +125,7 @@ pnpm --filter @restaurant-platform/api db:reset && pnpm --filter @restaurant-pla
 ## Tests and checks
 
 ```sh
-pnpm --filter @restaurant-platform/api test   # 95 tests against real PostgreSQL + Redis (Docker must be running)
+pnpm --filter @restaurant-platform/api test   # 150 tests against real PostgreSQL + Redis (Docker must be running)
 pnpm lint
 pnpm typecheck
 pnpm verify                                    # format + lint + typecheck + tests
@@ -128,12 +146,14 @@ and leave `NEXT_PUBLIC_SOCKET_URL` empty in `.env`.
 ## Not yet included
 
 MFA and password recovery, staff management screens, split bills and discounts, card / e-money / QR payments,
-online ordering and delivery, reports, subscription management, and production deployment. Japanese text and the
-tax/receipt rules still need partner approval.
+a real geocoding provider for delivery (delivery is refused until one is chosen), online-order receipts and refunds,
+customer email/SMS notifications, reports, subscription management, and production deployment. Japanese text and the
+tax/receipt rules (including 8% takeout / 10% delivery fee) still need partner approval.
 
 ## Documentation
 
 - Dine-in feature reference (data model, API, events, permissions): [docs/architecture/14-dine-in-workflow.md](docs/architecture/14-dine-in-workflow.md)
+- Online ordering reference: [docs/architecture/15-online-ordering.md](docs/architecture/15-online-ordering.md), security: [docs/security/online-ordering.md](docs/security/online-ordering.md)
 - QR ordering rules: [docs/security/qr-ordering.md](docs/security/qr-ordering.md)
 - Architecture overview: [docs/architecture/README.md](docs/architecture/README.md)
 - Decisions: [docs/decisions/README.md](docs/decisions/README.md)

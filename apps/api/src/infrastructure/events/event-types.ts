@@ -46,13 +46,19 @@ export type DomainEvent =
     }
   | {
       type: "kitchen.ticket.created";
-      payload: { ticketId: string; tableSessionId: string; tableName: string };
+      payload: {
+        ticketId: string;
+        orderNo: number;
+        source: string;
+        tableSessionId: string | null;
+        tableName: string | null;
+      };
     }
   | {
       type: "kitchen.item.status_changed";
       payload: {
         ticketId: string;
-        tableSessionId: string;
+        tableSessionId: string | null;
         kitchenItemIds: string[];
         status: string;
         ticketStatus: string;
@@ -75,6 +81,31 @@ export type DomainEvent =
   | {
       type: "checkout.completed";
       payload: { tableSessionId: string; tableId: string; paymentId: string; receiptId: string };
-    };
+    }
+  | { type: OnlineOrderEventType; payload: OnlineOrderEventPayload };
+
+/** Online (pickup/delivery) order events. Payloads carry ids and status only: never customer personal data. */
+export const ONLINE_ORDER_EVENTS = [
+  "online.order.created",
+  "online.order.accepted",
+  "online.order.rejected",
+  "online.order.cancelled",
+  "online.order.preparing",
+  "online.order.ready",
+  "online.order.dispatched",
+  "online.order.delivered",
+  "online.order.completed",
+  "online.order.payment_recorded",
+] as const;
+export type OnlineOrderEventType = (typeof ONLINE_ORDER_EVENTS)[number];
+
+// A type alias (not an interface) so it is assignable to the outbox's JSON record type.
+export type OnlineOrderEventPayload = {
+  onlineOrderId: string;
+  orderNo: number;
+  fulfillmentType: "pickup" | "delivery";
+  status: string;
+  paymentStatus: string;
+};
 
 export type DomainEventType = DomainEvent["type"];

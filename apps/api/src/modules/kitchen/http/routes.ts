@@ -6,12 +6,23 @@ import { parse } from "../../../shared/http/validate.js";
 import { requirePermission } from "../../authorization/index.js";
 import { requireFeature } from "../../entitlements/index.js";
 import { staff } from "../../identity/http/middleware.js";
-import { applyKitchenAction, listOpenTickets, listReadyItems } from "../index.js";
+import {
+  type KitchenTicketObserver,
+  applyKitchenAction,
+  isOnlineSource,
+  listOpenTickets,
+  listReadyItems,
+} from "../index.js";
 
 const Id = z.uuid();
 const KitchenAction = z.enum(["start", "ready"]);
 
-export function kitchenRoutes(deps: AppDeps): Router {
+export interface KitchenHooks {
+  /** Runs in the same transaction after a kitchen action on an ONLINE order's ticket (wired in app.ts). */
+  afterOnlineTicketChange?: KitchenTicketObserver;
+}
+
+export function kitchenRoutes(deps: AppDeps, hooks: KitchenHooks = {}): Router {
   const r = Router();
 
   r.get("/kitchen/tickets", async (req, res) => {
@@ -32,7 +43,9 @@ export function kitchenRoutes(deps: AppDeps): Router {
     const action = parse(KitchenAction, req.params["action"]);
     const ticket = await withTenantTransaction(deps.db, ctx, async (tx) => {
       await requireFeature(tx, ctx.locationId, "kitchen_workflow");
-      return applyKitchenAction(tx, ctx, action, { itemId: id });
+      const ticket = await applyKitchenAction(tx, ctx, action, { itemId: id });
+      if (isOnlineSource(ticket.source)) await hooks.afterOnlineTicketChange?.(tx, ctx, ticket);
+      return ticket;
     });
     res.json({ ticket });
   });
@@ -44,7 +57,9 @@ export function kitchenRoutes(deps: AppDeps): Router {
     const action = parse(KitchenAction, req.params["action"]);
     const ticket = await withTenantTransaction(deps.db, ctx, async (tx) => {
       await requireFeature(tx, ctx.locationId, "kitchen_workflow");
-      return applyKitchenAction(tx, ctx, action, { ticketId: id });
+      const ticket = await applyKitchenAction(tx, ctx, action, { ticketId: id });
+      if (isOnlineSource(ticket.source)) await hooks.afterOnlineTicketChange?.(tx, ctx, ticket);
+      return ticket;
     });
     res.json({ ticket });
   });

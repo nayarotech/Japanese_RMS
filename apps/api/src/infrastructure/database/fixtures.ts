@@ -2,11 +2,13 @@
  * Development and test fixtures. Runs with the MIGRATOR connection (platform rows such as brands and
  * plans are not writable by the runtime role). NEVER imported by the running API or worker.
  *
- * Plans: Basic and Standard both include the same dine-in feature keys. That is the point: one
- * implementation, reused by every package that includes the feature.
+ * Plans (DEVELOPMENT FIXTURES, not the commercial matrix): Basic = dine-in features. Standard and Premium = the SAME
+ * dine-in features + online ordering. That is the point: one implementation per feature, reused by every package
+ * that includes it. Real plan contents are configured by platform operators (docs/architecture/04-…).
  */
 import { type Kysely, sql } from "kysely";
 import { hashPassword } from "../../modules/identity/application/passwords.js";
+import { STATIC_DEMO_STORE } from "../../modules/integrations/index.js";
 import { newQrToken } from "../security/tokens.js";
 import type { Database, StaffRole } from "./schema.js";
 
@@ -18,6 +20,24 @@ export const DINE_IN_FEATURES = [
   "cash_checkout",
 ] as const;
 
+export const ONLINE_FEATURES = [
+  "online_ordering",
+  "pickup_ordering",
+  "delivery_management",
+] as const;
+
+const PLAN_FEATURES: Record<string, readonly string[]> = {
+  basic: DINE_IN_FEATURES,
+  standard: [...DINE_IN_FEATURES, ...ONLINE_FEATURES],
+  premium: [...DINE_IN_FEATURES, ...ONLINE_FEATURES],
+};
+
+/** Demo online-ordering setup: always open (00:00-24:00), pickup + delivery, Figma delivery tiers. */
+export const DEMO_DELIVERY_TIERS = [
+  { maxDistanceM: 2000, feeYen: 0, minOrderYen: 1500 },
+  { maxDistanceM: 4000, feeYen: 300, minOrderYen: 2000 },
+] as const;
+
 export interface TenantFixture {
   brandId: string;
   tenantId: string;
@@ -26,6 +46,8 @@ export interface TenantFixture {
   users: Record<StaffRole, { id: string; email: string; password: string }>;
   tables: { id: string; name: string; qrToken: string }[];
   menu: { id: string; nameEn: string; priceYen: number }[];
+  /** Public storefront link token (only when `online` was requested). */
+  storeToken: string | null;
 }
 
 export interface FixtureOptions {
@@ -36,6 +58,8 @@ export interface FixtureOptions {
   subscriptionStatus?: "trial" | "active" | "past_due" | "suspended" | "cancelled" | "expired";
   brandHost?: string;
   tables?: { name: string; capacity: number; area: string }[];
+  /** Configure online ordering (settings, always-open hours, delivery tiers, storefront link). */
+  online?: boolean;
 }
 
 const DEFAULT_TABLES = [
@@ -46,6 +70,9 @@ const DEFAULT_TABLES = [
   })),
   ...["C-1", "C-2", "C-3", "C-4"].map((name) => ({ name, capacity: 1, area: "Counter" })),
 ];
+
+// Alcohol stays at the standard rate for takeout; other food and drink use the reduced (8%) takeout rate.
+const ALCOHOL = new Set(["Draft beer (M)", "Highball"]);
 
 // Demo menu content (restaurant data, not UI translations).
 const DEMO_MENU: { category: [string, string]; items: [string, string, number, string?][] }[] = [
@@ -83,6 +110,7 @@ export async function ensurePlans(db: Kysely<Database>): Promise<void> {
   for (const [code, name] of [
     ["basic", "Basic"],
     ["standard", "Standard"],
+    ["premium", "Premium"],
   ] as const) {
     const plan = await db
       .insertInto("plans")
@@ -98,7 +126,12 @@ export async function ensurePlans(db: Kysely<Database>): Promise<void> {
       .executeTakeFirstOrThrow();
     await db
       .insertInto("plan_version_features")
-      .values(DINE_IN_FEATURES.map((feature_key) => ({ plan_version_id: version.id, feature_key })))
+      .values(
+        (PLAN_FEATURES[code] ?? []).map((feature_key) => ({
+          plan_version_id: version.id,
+          feature_key,
+        })),
+      )
       .onConflict((oc) => oc.columns(["plan_version_id", "feature_key"]).doNothing())
       .execute();
   }
@@ -232,6 +265,7 @@ export async function createTenantFixture(
             category_id: c.id,
             price_yen: price,
             tax_rate_id: standard.id,
+            takeout_tax_rate_id: ALCOHOL.has(en) ? standard.id : reduced.id,
             sort_order: ii,
           })
           .returning("id")
@@ -259,6 +293,58 @@ export async function createTenantFixture(
       }
     }
 
+    let storeToken: string | null = null;
+    if (opts.online) {
+      await tx
+        .insertInto("online_ordering_settings")
+        .values({
+          tenant_id: tenantId,
+          location_id: location.id,
+          is_enabled: true,
+          pickup_enabled: true,
+          delivery_enabled: true,
+          pickup_prep_minutes: 10,
+          pickup_slot_minutes: 15,
+          pickup_days_ahead: 1,
+          delivery_prep_minutes: 40,
+          min_order_yen: 1000,
+          store_latitude: STATIC_DEMO_STORE.latitude,
+          store_longitude: STATIC_DEMO_STORE.longitude,
+          checkout_note_ja: "アレルギーがある場合は、ご注文時にお知らせください",
+          checkout_note_en: "Please tell us about any allergies when ordering",
+        })
+        .execute();
+      await tx
+        .insertInto("online_ordering_hours")
+        .values(
+          [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+            tenant_id: tenantId,
+            location_id: location.id,
+            weekday,
+            opens_at: "00:00",
+            closes_at: "24:00:00",
+          })),
+        )
+        .execute();
+      await tx
+        .insertInto("delivery_fee_tiers")
+        .values(
+          DEMO_DELIVERY_TIERS.map((t) => ({
+            tenant_id: tenantId,
+            location_id: location.id,
+            max_distance_m: t.maxDistanceM,
+            fee_yen: t.feeYen,
+            min_order_yen: t.minOrderYen,
+          })),
+        )
+        .execute();
+      storeToken = newQrToken();
+      await tx
+        .insertInto("online_store_links")
+        .values({ token: storeToken, tenant_id: tenantId, location_id: location.id })
+        .execute();
+    }
+
     return {
       brandId: brand.id,
       tenantId,
@@ -267,6 +353,7 @@ export async function createTenantFixture(
       users,
       tables,
       menu,
+      storeToken,
     };
   });
 }

@@ -17,6 +17,10 @@
 
 ## Concepts and data model (planned, not migrated)
 
+> Implemented so far: plans / plan versions / plan features / subscriptions (read-only resolution) and, since migration
+> `2026112003_online_ordering`, **read-side resolution of `entitlement_overrides`** (grant/revoke with reason, operator and
+> window; not writable by the runtime role). Override administration UI/API is still future work.
+
 ```mermaid
 erDiagram
   FEATURE ||--o{ PLAN_VERSION_FEATURE : "included in"

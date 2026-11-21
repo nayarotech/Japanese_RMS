@@ -1,7 +1,12 @@
 /**
  * menus: categories, items, prices, availability, translations (ja required, en optional).
  * Prices here are authoritative inputs for orders; clients never send prices.
+ *
+ * Tax channel: Japanese consumption tax differs for eating in (10%) and takeout/delivery food (reduced 8%).
+ * Each item has a dine-in rate and an optional takeout rate (defaults to the dine-in rate when not set).
+ * PENDING partner/accountant approval of the per-item rates (docs/architecture/15-online-ordering.md).
  */
+export type TaxChannel = "dine_in" | "takeout";
 import type { Tx } from "../../infrastructure/database/db.js";
 import { Errors } from "../../shared/errors/app-error.js";
 
@@ -18,6 +23,9 @@ export interface MenuItemView {
   description: { ja: string | null; en: string | null };
   priceYen: number;
   taxRateBp: number;
+  taxRateId: string;
+  takeoutTaxRateId: string | null;
+  takeoutTaxRateBp: number;
   isAvailable: boolean;
   isActive: boolean;
   sortOrder: number;
@@ -53,6 +61,7 @@ export async function getMenu(
   let itemQuery = tx
     .selectFrom("menu_items as i")
     .innerJoin("tax_rates as tr", "tr.id", "i.tax_rate_id")
+    .leftJoin("tax_rates as ttr", "ttr.id", "i.takeout_tax_rate_id")
     .leftJoin("menu_item_translations as tja", (j) =>
       j.onRef("tja.menu_item_id", "=", "i.id").on("tja.locale", "=", "ja"),
     )
@@ -62,6 +71,9 @@ export async function getMenu(
     .select([
       "i.id",
       "i.category_id",
+      "i.tax_rate_id",
+      "i.takeout_tax_rate_id",
+      "ttr.rate_bp as takeout_rate_bp",
       "i.code",
       "i.price_yen",
       "i.is_available",
@@ -88,6 +100,9 @@ export async function getMenu(
       description: { ja: i.desc_ja, en: i.desc_en },
       priceYen: i.price_yen,
       taxRateBp: i.rate_bp,
+      taxRateId: i.tax_rate_id,
+      takeoutTaxRateId: i.takeout_tax_rate_id,
+      takeoutTaxRateBp: i.takeout_rate_bp ?? i.rate_bp,
       isAvailable: i.is_available,
       isActive: i.is_active,
       sortOrder: i.sort_order,
@@ -114,19 +129,21 @@ export interface OrderableItem {
 }
 
 /**
- * Loads items for an order at their CURRENT server-side price and tax rate.
- * Throws if any id is unknown, inactive, unavailable, or belongs to another location.
+ * Loads items for an order at their CURRENT server-side price and the tax rate of the channel
+ * (dine-in or takeout/delivery). Throws if any id is unknown, inactive, unavailable, or belongs to another location.
  */
 export async function getOrderableItems(
   tx: Tx,
   locationId: string,
   ids: readonly string[],
+  channel: TaxChannel = "dine_in",
 ): Promise<Map<string, OrderableItem>> {
   const unique = [...new Set(ids)];
   const rows = await tx
     .selectFrom("menu_items as i")
     .innerJoin("menu_categories as c", "c.id", "i.category_id")
     .innerJoin("tax_rates as tr", "tr.id", "i.tax_rate_id")
+    .leftJoin("tax_rates as ttr", "ttr.id", "i.takeout_tax_rate_id")
     .leftJoin("menu_item_translations as tja", (j) =>
       j.onRef("tja.menu_item_id", "=", "i.id").on("tja.locale", "=", "ja"),
     )
@@ -136,6 +153,7 @@ export async function getOrderableItems(
     .select([
       "i.id",
       "i.price_yen",
+      "ttr.rate_bp as takeout_rate_bp",
       "i.is_available",
       "i.is_active",
       "c.is_active as category_active",
@@ -156,7 +174,7 @@ export async function getOrderableItems(
       nameJa: r.name_ja ?? "",
       nameEn: r.name_en,
       priceYen: r.price_yen,
-      taxRateBp: r.rate_bp,
+      taxRateBp: channel === "takeout" ? (r.takeout_rate_bp ?? r.rate_bp) : r.rate_bp,
     });
   }
   const missing = unique.filter((id) => !map.has(id));
@@ -189,6 +207,7 @@ export interface MenuItemInput {
   code?: string | null | undefined;
   priceYen: number;
   taxRateId: string;
+  takeoutTaxRateId?: string | null | undefined;
   nameJa: string;
   nameEn?: string | null | undefined;
   descriptionJa?: string | null | undefined;
@@ -203,6 +222,7 @@ export async function createMenuItem(
   input: MenuItemInput,
 ): Promise<string> {
   await assertCategoryAndTax(tx, locationId, input.categoryId, input.taxRateId);
+  if (input.takeoutTaxRateId) await assertTaxRate(tx, locationId, input.takeoutTaxRateId);
   const item = await tx
     .insertInto("menu_items")
     .values({
@@ -212,6 +232,7 @@ export async function createMenuItem(
       code: input.code ?? null,
       price_yen: input.priceYen,
       tax_rate_id: input.taxRateId,
+      takeout_tax_rate_id: input.takeoutTaxRateId ?? null,
       sort_order: input.sortOrder ?? 0,
     })
     .returning("id")
@@ -229,6 +250,7 @@ export async function updateMenuItem(
   input: MenuItemInput & { isActive?: boolean | undefined },
 ): Promise<void> {
   await assertCategoryAndTax(tx, locationId, input.categoryId, input.taxRateId);
+  if (input.takeoutTaxRateId) await assertTaxRate(tx, locationId, input.takeoutTaxRateId);
   const res = await tx
     .updateTable("menu_items")
     .set((eb) => ({
@@ -236,6 +258,9 @@ export async function updateMenuItem(
       code: input.code ?? null,
       price_yen: input.priceYen,
       tax_rate_id: input.taxRateId,
+      ...(input.takeoutTaxRateId === undefined
+        ? {}
+        : { takeout_tax_rate_id: input.takeoutTaxRateId }),
       sort_order: input.sortOrder ?? 0,
       ...(input.isActive === undefined ? {} : { is_active: input.isActive }),
       version: eb("version", "+", 1),
@@ -296,6 +321,17 @@ async function assertCategoryAndTax(
   ]);
   if (!cat)
     throw Errors.unprocessable("invalid_category", "Category does not belong to this location");
+  if (!tax)
+    throw Errors.unprocessable("invalid_tax_rate", "Tax rate does not belong to this location");
+}
+
+async function assertTaxRate(tx: Tx, locationId: string, taxRateId: string): Promise<void> {
+  const tax = await tx
+    .selectFrom("tax_rates")
+    .select("id")
+    .where("id", "=", taxRateId)
+    .where("location_id", "=", locationId)
+    .executeTakeFirst();
   if (!tax)
     throw Errors.unprocessable("invalid_tax_rate", "Tax rate does not belong to this location");
 }

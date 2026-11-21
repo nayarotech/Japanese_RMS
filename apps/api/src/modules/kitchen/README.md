@@ -7,6 +7,8 @@
 - Kitchen tickets (one per order submission) and kitchen ticket items (one per order line, with name, quantity and note snapshots).
 - Item-level status: `queued → preparing → ready → served` (`voided` set by orders). Ticket status is derived from items.
 - Food-ready notifications (`waiter.food.ready`) and serving confirmation (`waiter.food.served`).
+- Tickets for accepted **online** orders (no table: order number + due time). They are handed over by online-orders
+  (`handOverOrderTicket`), never served by the floor; kitchen progress is reported through an injected observer (ADR-0009).
 
 **Does not own**
 

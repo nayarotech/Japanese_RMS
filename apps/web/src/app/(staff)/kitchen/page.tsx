@@ -14,6 +14,13 @@ import { errorKey, staffApi } from "../../../lib/api";
 import { formatTime, minutesSince, pickSnapshotName } from "../../../lib/format";
 import { useRealtime } from "../../../lib/realtime";
 
+const SOURCE_STYLE: Record<KitchenTicketDto["source"], string> = {
+  STAFF_POS: "bg-chip text-ink-2",
+  TABLE_QR: "bg-brand-tint text-brand",
+  ONLINE_PICKUP: "bg-chip text-ink-2",
+  ONLINE_DELIVERY: "bg-ink text-white",
+};
+
 export default function KitchenPage() {
   const t = useTranslations();
   const locale = useLocale();
@@ -129,7 +136,9 @@ export default function KitchenPage() {
                     <div
                       className={`flex items-center justify-between px-3.5 py-2.5 ${ticket.status === "ready" ? "bg-brand text-white" : "bg-chip"}`}
                     >
-                      <span className="text-[20px] font-bold">{ticket.tableName}</span>
+                      <span className="text-[20px] font-bold">
+                        {ticket.tableName ?? `#${String(ticket.orderNo).padStart(4, "0")}`}
+                      </span>
                       <span className="text-[14px] font-semibold">
                         {t("common.minutes", { count: minutesSince(ticket.createdAt, now) })}
                       </span>
@@ -137,11 +146,18 @@ export default function KitchenPage() {
                     <div className="px-3.5 pt-2">
                       <div className="mb-1 flex items-center gap-2 text-[12px] text-muted">
                         <span
-                          className={`rounded px-1.5 py-0.5 font-semibold ${ticket.source === "TABLE_QR" ? "bg-brand-tint text-brand" : "bg-chip text-ink-2"}`}
+                          className={`rounded px-1.5 py-0.5 font-semibold ${SOURCE_STYLE[ticket.source]}`}
                         >
                           {t(`source.${ticket.source}`)}
                         </span>
                         <span>{formatTime(ticket.createdAt, locale, me.location.timeZone)}</span>
+                        {ticket.dueAt && (
+                          <span className="font-semibold text-ink">
+                            {t("kitchen.due", {
+                              time: formatTime(ticket.dueAt, locale, me.location.timeZone),
+                            })}
+                          </span>
+                        )}
                       </div>
                       <ul>
                         {ticket.items
@@ -213,15 +229,22 @@ export default function KitchenPage() {
                           {t("kitchen.markReady")}
                         </button>
                       )}
-                    {can("floor.serve") && ticket.status === "ready" && (
-                      <button
-                        type="button"
-                        onClick={() => void act(`/floor/tickets/${ticket.id}/serve`)}
-                        className="h-12 w-full bg-white text-[15px] font-semibold text-ink"
-                      >
-                        {t("kitchen.served")}
-                      </button>
+                    {ticket.status === "ready" && ticket.tableSessionId === null && (
+                      <p className="h-12 w-full bg-white px-3 text-center text-[14px] leading-[48px] font-semibold text-muted">
+                        {t("kitchen.awaitingHandover")}
+                      </p>
                     )}
+                    {can("floor.serve") &&
+                      ticket.status === "ready" &&
+                      ticket.tableSessionId !== null && (
+                        <button
+                          type="button"
+                          onClick={() => void act(`/floor/tickets/${ticket.id}/serve`)}
+                          className="h-12 w-full bg-white text-[15px] font-semibold text-ink"
+                        >
+                          {t("kitchen.served")}
+                        </button>
+                      )}
                   </article>
                 ))}
               </div>

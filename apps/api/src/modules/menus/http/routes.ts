@@ -22,6 +22,7 @@ const ItemBody = z.strictObject({
   code: z.string().trim().max(20).nullish(),
   priceYen: z.int().min(0).max(10_000_000),
   taxRateId: z.uuid(),
+  takeoutTaxRateId: z.uuid().nullish(),
   nameJa: z.string().trim().min(1).max(80),
   nameEn: z.string().trim().min(1).max(80).nullish(),
   descriptionJa: z.string().trim().max(300).nullish(),

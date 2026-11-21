@@ -1,6 +1,9 @@
 /**
  * kitchen: kitchen tickets and item-level preparation/serving status (basic workflow only:
  * no stations, inventory, recipes or costing).
+ *
+ * Tickets come from dine-in orders (table session + table name) and from accepted online orders (no table; shown by
+ * order number, with a due time). Online tickets are handed over by the online-orders workflow, never "served" at a table.
  */
 import type { Tx } from "../../infrastructure/database/db.js";
 import type {
@@ -22,6 +25,21 @@ import {
 } from "./domain/status.js";
 
 export { isEditable } from "./domain/status.js";
+
+const ONLINE_SOURCES: readonly OrderSource[] = ["ONLINE_PICKUP", "ONLINE_DELIVERY"];
+export function isOnlineSource(source: OrderSource): boolean {
+  return ONLINE_SOURCES.includes(source);
+}
+
+/**
+ * Called inside the kitchen action's transaction after a ticket changed (dependency injected at the composition root,
+ * so kitchen never imports the modules that react to it). Used by online-orders to follow preparation progress.
+ */
+export type KitchenTicketObserver = (
+  tx: Tx,
+  ctx: StaffContext,
+  ticket: KitchenTicketView,
+) => Promise<void>;
 
 export interface NewTicketItem {
   orderItemId: string;
@@ -45,8 +63,10 @@ export interface KitchenItemView {
 export interface KitchenTicketView {
   id: string;
   orderId: string;
-  tableSessionId: string;
-  tableName: string;
+  orderNo: number;
+  tableSessionId: string | null;
+  tableName: string | null;
+  dueAt: Date | null;
   source: OrderSource;
   status: KitchenTicketStatus;
   createdAt: Date;
@@ -60,8 +80,10 @@ export async function createTicket(
     tenantId: string;
     locationId: string;
     orderId: string;
-    tableSessionId: string;
-    tableName: string;
+    orderNo: number;
+    tableSessionId: string | null;
+    tableName: string | null;
+    dueAt?: Date | null;
     source: OrderSource;
     items: NewTicketItem[];
   },
@@ -72,8 +94,10 @@ export async function createTicket(
       tenant_id: args.tenantId,
       location_id: args.locationId,
       order_id: args.orderId,
+      order_no: args.orderNo,
       table_session_id: args.tableSessionId,
       table_name: args.tableName,
+      due_at: args.dueAt ?? null,
       source: args.source,
     })
     .returning("id")
@@ -97,6 +121,8 @@ export async function createTicket(
     type: "kitchen.ticket.created",
     payload: {
       ticketId: ticket.id,
+      orderNo: args.orderNo,
+      source: args.source,
       tableSessionId: args.tableSessionId,
       tableName: args.tableName,
     },
@@ -111,7 +137,17 @@ async function loadTickets(
 ): Promise<KitchenTicketView[]> {
   let q = tx
     .selectFrom("kitchen_tickets")
-    .select(["id", "order_id", "table_session_id", "table_name", "source", "status", "created_at"])
+    .select([
+      "id",
+      "order_id",
+      "order_no",
+      "table_session_id",
+      "table_name",
+      "due_at",
+      "source",
+      "status",
+      "created_at",
+    ])
     .where("location_id", "=", locationId);
   if (where.statuses) q = q.where("status", "in", where.statuses);
   if (where.ticketIds) q = q.where("id", "in", where.ticketIds);
@@ -140,8 +176,10 @@ async function loadTickets(
   return tickets.map((t) => ({
     id: t.id,
     orderId: t.order_id,
+    orderNo: t.order_no,
     tableSessionId: t.table_session_id,
     tableName: t.table_name,
+    dueAt: t.due_at,
     source: t.source,
     status: t.status,
     createdAt: t.created_at,
@@ -188,10 +226,12 @@ export async function applyKitchenAction(
       .forUpdate()
       .executeTakeFirst();
     if (!item) throw Errors.notFound("kitchen item");
+    if (action === "serve") await assertServableAtTable(tx, item.ticket_id);
     assertTransition(item.status, action);
     ticketId = item.ticket_id;
     itemIds = [item.id];
   } else {
+    if (action === "serve") await assertServableAtTable(tx, target.ticketId);
     const { from } = transitionFor(action);
     const rows = await tx
       .selectFrom("kitchen_ticket_items")
@@ -199,6 +239,7 @@ export async function applyKitchenAction(
       .where("ticket_id", "=", target.ticketId)
       .where("location_id", "=", ctx.locationId)
       .where("status", "=", from)
+      .orderBy("id")
       .forUpdate()
       .execute();
     if (rows.length === 0) {
@@ -240,14 +281,16 @@ export async function applyKitchenAction(
     },
   });
 
-  if (action === "ready") {
-    const session = await getSession(tx, ctx.locationId, ticket.tableSessionId);
+  // Table food: alert the floor. Online tickets are followed by online-orders instead (kitchen hook).
+  const { tableSessionId, tableName } = ticket;
+  if (action === "ready" && tableSessionId !== null && tableName !== null) {
+    const session = await getSession(tx, ctx.locationId, tableSessionId);
     await appendOutbox(tx, ctx.tenantId, ctx.locationId, {
       type: "waiter.food.ready",
       payload: {
         ticketId,
-        tableSessionId: ticket.tableSessionId,
-        tableName: ticket.tableName,
+        tableSessionId,
+        tableName,
         assignedWaiterId: session.assignedWaiterId,
         items: ticket.items
           .filter((i) => itemIds.includes(i.id))
@@ -261,10 +304,10 @@ export async function applyKitchenAction(
       },
     });
   }
-  if (action === "serve") {
+  if (action === "serve" && tableSessionId !== null) {
     await appendOutbox(tx, ctx.tenantId, ctx.locationId, {
       type: "waiter.food.served",
-      payload: { ticketId, tableSessionId: ticket.tableSessionId, kitchenItemIds: itemIds },
+      payload: { ticketId, tableSessionId, kitchenItemIds: itemIds },
     });
     await recordAudit(tx, ctx, {
       action: "kitchen.items_served",
@@ -274,6 +317,121 @@ export async function applyKitchenAction(
     });
   }
   return ticket;
+}
+
+/** Online tickets are handed over by the online-orders workflow (pickup/dispatch), not served at a table. */
+async function assertServableAtTable(tx: Tx, ticketId: string): Promise<void> {
+  const t = await tx
+    .selectFrom("kitchen_tickets")
+    .select("source")
+    .where("id", "=", ticketId)
+    .executeTakeFirst();
+  if (t && isOnlineSource(t.source))
+    throw Errors.conflict(
+      "online_handover_required",
+      "Online orders are handed over from the Online orders screen",
+    );
+}
+
+/**
+ * Locks every item of an order's ticket (if it has one), in id order. Online-orders calls this BEFORE locking its own
+ * row, matching the kitchen action's lock order (items, then the online order) so the two never deadlock.
+ */
+export async function lockOrderTicketItems(tx: Tx, orderId: string): Promise<void> {
+  await tx
+    .selectFrom("kitchen_ticket_items as i")
+    .innerJoin("kitchen_tickets as t", "t.id", "i.ticket_id")
+    .select("i.id")
+    .where("t.order_id", "=", orderId)
+    .orderBy("i.id")
+    .forUpdate("i")
+    .execute();
+}
+
+/** The ticket of an order, or null if it was never sent to the kitchen. */
+export async function getTicketForOrder(
+  tx: Tx,
+  locationId: string,
+  orderId: string,
+): Promise<KitchenTicketView | null> {
+  const t = await tx
+    .selectFrom("kitchen_tickets")
+    .select("id")
+    .where("order_id", "=", orderId)
+    .where("location_id", "=", locationId)
+    .executeTakeFirst();
+  if (!t) return null;
+  const [view] = await loadTickets(tx, locationId, { ticketIds: [t.id] });
+  return view ?? null;
+}
+
+/**
+ * Online handover (pickup collected or delivery dispatched): every ready item becomes `served`, which takes the ticket
+ * off the kitchen display. Requires the whole ticket to be ready.
+ */
+export async function handOverOrderTicket(
+  tx: Tx,
+  ctx: StaffContext,
+  orderId: string,
+): Promise<void> {
+  const ticket = await getTicketForOrder(tx, ctx.locationId, orderId);
+  if (!ticket)
+    throw Errors.conflict("not_in_kitchen", "This order has not been sent to the kitchen");
+  if (ticket.status !== "ready")
+    throw Errors.conflict("kitchen_not_ready", "The kitchen has not finished this order");
+  const ids = ticket.items.filter((i) => i.status === "ready").map((i) => i.id);
+  const now = new Date();
+  await tx
+    .updateTable("kitchen_ticket_items")
+    .set((eb) => ({
+      status: "served",
+      served_at: now,
+      served_by: ctx.userId,
+      version: eb("version", "+", 1),
+    }))
+    .where("id", "in", ids)
+    .execute();
+  const updated = await refreshTicketStatus(tx, ticket.id);
+  await appendOutbox(tx, ctx.tenantId, ctx.locationId, {
+    type: "kitchen.item.status_changed",
+    payload: {
+      ticketId: ticket.id,
+      tableSessionId: null,
+      kitchenItemIds: ids,
+      status: "served",
+      ticketStatus: updated.status,
+    },
+  });
+}
+
+/** Voids every not-yet-served item of an order's ticket (order cancellation). No-op if there is no ticket. */
+export async function voidOrderTicket(tx: Tx, orderId: string): Promise<void> {
+  const t = await tx
+    .selectFrom("kitchen_tickets")
+    .select(["id", "location_id", "tenant_id", "table_session_id"])
+    .where("order_id", "=", orderId)
+    .executeTakeFirst();
+  if (!t) return;
+  const rows = await tx
+    .updateTable("kitchen_ticket_items")
+    .set((eb) => ({ status: "voided", version: eb("version", "+", 1) }))
+    .where("ticket_id", "=", t.id)
+    .where("status", "in", ["queued", "preparing", "ready"])
+    .returning("id")
+    .execute();
+  const updated = await refreshTicketStatus(tx, t.id);
+  if (rows.length > 0) {
+    await appendOutbox(tx, t.tenant_id, t.location_id, {
+      type: "kitchen.item.status_changed",
+      payload: {
+        ticketId: t.id,
+        tableSessionId: t.table_session_id,
+        kitchenItemIds: rows.map((r) => r.id),
+        status: "voided",
+        ticketStatus: updated.status,
+      },
+    });
+  }
 }
 
 async function refreshTicketStatus(tx: Tx, ticketId: string): Promise<KitchenTicketView> {
@@ -312,19 +470,25 @@ export async function listReadyItems(tx: Tx, locationId: string) {
     ])
     .where("i.location_id", "=", locationId)
     .where("i.status", "=", "ready")
+    .where("t.table_session_id", "is not", null) // online orders are not served by the floor
     .orderBy("i.ready_at")
     .execute();
-  return rows.map((r) => ({
-    kitchenItemId: r.id,
-    ticketId: r.ticket_id,
-    tableSessionId: r.table_session_id,
-    tableName: r.table_name,
-    nameJa: r.name_ja,
-    nameEn: r.name_en,
-    quantity: r.quantity,
-    note: r.note,
-    readyAt: r.ready_at,
-  }));
+  return rows.flatMap((r) => {
+    if (r.table_session_id === null || r.table_name === null) return [];
+    return [
+      {
+        kitchenItemId: r.id,
+        ticketId: r.ticket_id,
+        tableSessionId: r.table_session_id,
+        tableName: r.table_name,
+        nameJa: r.name_ja,
+        nameEn: r.name_en,
+        quantity: r.quantity,
+        note: r.note,
+        readyAt: r.ready_at,
+      },
+    ];
+  });
 }
 
 /** Item statuses keyed by order item id (for order views and edit rules). */
@@ -400,5 +564,9 @@ export async function readyCountsBySession(
     .where("i.status", "=", "ready")
     .groupBy("t.table_session_id")
     .execute();
-  return new Map(rows.map((r) => [r.table_session_id, Number(r.n)]));
+  return new Map(
+    rows.flatMap((r) =>
+      r.table_session_id === null ? [] : [[r.table_session_id, Number(r.n)] as const],
+    ),
+  );
 }

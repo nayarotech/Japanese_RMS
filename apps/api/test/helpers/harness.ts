@@ -21,6 +21,7 @@ import {
 import type { Database } from "../../src/infrastructure/database/schema.js";
 import { createLogger } from "../../src/infrastructure/logging/logger.js";
 import { createRedis } from "../../src/infrastructure/redis/redis.js";
+import { type Geocoder, createStaticDemoGeocoder } from "../../src/modules/integrations/index.js";
 import {
   DEFAULT_RATE_LIMITS,
   type RateLimitConfig,
@@ -60,7 +61,9 @@ export function migratorDbFor(config: ReturnType<typeof loadConfig>): Kysely<Dat
   });
 }
 
-export function createHarness(opts: { limits?: Partial<RateLimitConfig> } = {}): Promise<Harness> {
+export function createHarness(
+  opts: { limits?: Partial<RateLimitConfig>; geocoder?: Geocoder } = {},
+): Promise<Harness> {
   const config = loadConfig(process.env);
   const db = createDb(
     createPool(config, {
@@ -82,7 +85,14 @@ export function createHarness(opts: { limits?: Partial<RateLimitConfig> } = {}):
     { ...GENEROUS, ...opts.limits },
     `rl-test-${randomUUID()}`,
   );
-  const deps: AppDeps = { config, db, redis, logger: createLogger(config, "test"), limits };
+  const deps: AppDeps = {
+    config,
+    db,
+    redis,
+    logger: createLogger(config, "test"),
+    limits,
+    geocoder: opts.geocoder ?? createStaticDemoGeocoder(),
+  };
   const migratorDb = migratorDbFor(config);
   return Promise.resolve({
     deps,

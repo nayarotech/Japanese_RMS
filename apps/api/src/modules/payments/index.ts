@@ -1,6 +1,7 @@
 /**
  * payments: restaurant checkout (diners paying the restaurant). NOT SaaS subscription billing.
- * Initial scope: full cash settlement of a dining session, receipt issuance, table release.
+ * Scope: full cash settlement of a dining session (receipt, table release), and cash collected for a single online
+ * order (pay on pickup / cash on delivery). No card, e-money or QR gateways yet.
  */
 import type { Tx } from "../../infrastructure/database/db.js";
 import { nextCounter } from "../../infrastructure/database/db.js";
@@ -191,4 +192,94 @@ export async function getReceipt(tx: Tx, locationId: string, receiptId: string) 
     paymentId: r.payment_id,
     body: r.body,
   };
+}
+
+const UNIQUE_VIOLATION = "23505";
+
+export interface OrderPaymentResult {
+  paymentId: string;
+  amountDueYen: number;
+  amountReceivedYen: number;
+  changeYen: number;
+}
+
+/**
+ * Records cash actually collected for ONE order (online pickup/delivery). The caller (online-orders) has verified the
+ * order state and the authoritative amount due. At most one completed payment per order is enforced by a partial
+ * unique index, so a double tap or two staff members can never record it twice.
+ */
+export async function recordOrderCashPayment(
+  tx: Tx,
+  ctx: StaffContext,
+  input: { orderId: string; amountDueYen: number; amountReceivedYen: number },
+): Promise<OrderPaymentResult> {
+  if (input.amountReceivedYen < input.amountDueYen) {
+    throw Errors.unprocessable("insufficient_cash", "Amount received is less than the amount due", {
+      totalYen: input.amountDueYen,
+      shortByYen: input.amountDueYen - input.amountReceivedYen,
+    });
+  }
+  const changeYen = input.amountReceivedYen - input.amountDueYen;
+  let paymentId: string;
+  try {
+    const row = await tx
+      .insertInto("payments")
+      .values({
+        tenant_id: ctx.tenantId,
+        location_id: ctx.locationId,
+        table_session_id: null,
+        order_id: input.orderId,
+        method: "cash",
+        amount_due_yen: input.amountDueYen,
+        amount_received_yen: input.amountReceivedYen,
+        change_yen: changeYen,
+        received_by: ctx.userId,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    paymentId = row.id;
+  } catch (err) {
+    if ((err as { code?: string }).code === UNIQUE_VIOLATION)
+      throw Errors.conflict("already_paid", "Payment has already been recorded for this order");
+    throw err;
+  }
+  await recordAudit(tx, ctx, {
+    action: "order_payment.recorded",
+    targetType: "payment",
+    targetId: paymentId,
+    metadata: {
+      orderId: input.orderId,
+      method: "cash",
+      amountDueYen: input.amountDueYen,
+      amountReceivedYen: input.amountReceivedYen,
+      changeYen,
+    },
+  });
+  return {
+    paymentId,
+    amountDueYen: input.amountDueYen,
+    amountReceivedYen: input.amountReceivedYen,
+    changeYen,
+  };
+}
+
+/** The completed payment of one order, if any (online order detail). */
+export async function getOrderPayment(tx: Tx, locationId: string, orderId: string) {
+  const p = await tx
+    .selectFrom("payments")
+    .select(["id", "method", "amount_due_yen", "amount_received_yen", "change_yen", "created_at"])
+    .where("order_id", "=", orderId)
+    .where("location_id", "=", locationId)
+    .where("status", "=", "completed")
+    .executeTakeFirst();
+  return p
+    ? {
+        paymentId: p.id,
+        method: p.method,
+        amountDueYen: p.amount_due_yen,
+        amountReceivedYen: p.amount_received_yen,
+        changeYen: p.change_yen,
+        recordedAt: p.created_at,
+      }
+    : null;
 }
