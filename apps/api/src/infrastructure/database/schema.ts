@@ -252,6 +252,31 @@ export interface MenuItemTranslationsTable {
   name: string;
   description: string | null;
 }
+export type MenuItemImageStatus = "pending" | "active" | "retired" | "deleted";
+export interface MenuItemImagesTable {
+  id: Generated<string>;
+  tenant_id: string;
+  location_id: string;
+  menu_item_id: string;
+  status: Generated<MenuItemImageStatus>;
+  storage_key: string;
+  thumb_storage_key: string;
+  content_type: "image/webp";
+  width: number;
+  height: number;
+  byte_size: number;
+  thumb_width: number;
+  thumb_height: number;
+  thumb_byte_size: number;
+  source_content_type: "image/jpeg" | "image/png" | "image/webp";
+  source_byte_size: number;
+  uploaded_by: string | null;
+  created_at: Generated<Date>;
+  activated_at: NullableTimestamp;
+  retired_at: NullableTimestamp;
+  deleted_at: NullableTimestamp;
+  cleanup_attempts: Generated<number>;
+}
 export interface OrdersTable {
   id: Generated<string>;
   tenant_id: string;
@@ -491,6 +516,7 @@ export interface Database {
   menu_category_translations: MenuCategoryTranslationsTable;
   menu_items: MenuItemsTable;
   menu_item_translations: MenuItemTranslationsTable;
+  menu_item_images: MenuItemImagesTable;
   orders: OrdersTable;
   order_items: OrderItemsTable;
   kitchen_tickets: KitchenTicketsTable;

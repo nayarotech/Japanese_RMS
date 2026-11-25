@@ -168,7 +168,7 @@ export async function getStorefront(deps: AppDeps, token: string, now = new Date
     };
     if (a.state === "unavailable")
       return { ...base, menu: [], pickup: null, delivery: null, hours: [] };
-    const menu = await getMenu(tx, ref.locationId, { publicView: true });
+    const menu = await getMenu(tx, ref.locationId, { publicView: true, storage: deps.storage });
     return {
       ...base,
       hours: store.hours,
@@ -201,6 +201,7 @@ export async function getStorefront(deps: AppDeps, token: string, now = new Date
             description: i.description,
             priceYen: i.priceYen,
             isAvailable: i.isAvailable,
+            image: i.image,
           })),
         }))
         .filter((c) => c.items.length > 0),

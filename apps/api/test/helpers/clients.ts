@@ -14,6 +14,7 @@ export interface StaffClient {
   post(path: string, body?: object, headers?: Record<string, string>): request.Test;
   patch(path: string, body?: object): request.Test;
   put(path: string, body?: object): request.Test;
+  del(path: string): request.Test;
 }
 
 function cookieFrom(res: request.Response): string {
@@ -45,6 +46,7 @@ export async function loginStaff(app: App, email: string, password: string): Pro
         .send(body),
     patch: (p, body = {}) => withAuth(request(app).patch(`/api/v1${p}`)).send(body),
     put: (p, body = {}) => withAuth(request(app).put(`/api/v1${p}`)).send(body),
+    del: (p) => withAuth(request(app).delete(`/api/v1${p}`)),
   };
 }
 

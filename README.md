@@ -25,6 +25,11 @@ POS, kitchen display, waiter app, cash checkout, and online ordering with pickup
    (delivered never means paid).
 5. Managers configure hours, pickup timing, minimums, the delivery area and fees, and can pause ordering. Basic plans cannot use any of it.
 
+**Menu photos:** owners and managers add, replace or remove one photo per menu item (click or drag and drop, preview,
+progress). The same optimized photo appears in menu management, the POS, the table QR menu and online ordering.
+Local development stores photos under `apps/api/.data/storage`; staging/production require S3-compatible storage
+(`STORAGE_*` in `.env.example`).
+
 Japanese and English UI. All prices, tax and totals are calculated on the server.
 
 ## Tech stack
@@ -154,6 +159,7 @@ tax/receipt rules (including 8% takeout / 10% delivery fee) still need partner a
 
 - Dine-in feature reference (data model, API, events, permissions): [docs/architecture/14-dine-in-workflow.md](docs/architecture/14-dine-in-workflow.md)
 - Online ordering reference: [docs/architecture/15-online-ordering.md](docs/architecture/15-online-ordering.md), security: [docs/security/online-ordering.md](docs/security/online-ordering.md)
+- Menu photos reference: [docs/architecture/16-menu-item-images.md](docs/architecture/16-menu-item-images.md), security: [docs/security/menu-images.md](docs/security/menu-images.md)
 - QR ordering rules: [docs/security/qr-ordering.md](docs/security/qr-ordering.md)
 - Architecture overview: [docs/architecture/README.md](docs/architecture/README.md)
 - Decisions: [docs/decisions/README.md](docs/decisions/README.md)

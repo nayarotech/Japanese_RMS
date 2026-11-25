@@ -10,7 +10,7 @@ import { resolveBrandByHost } from "./modules/branding/index.js";
 import { identityRoutes } from "./modules/identity/http/routes.js";
 import { requireStaff } from "./modules/identity/http/middleware.js";
 import { kitchenRoutes } from "./modules/kitchen/http/routes.js";
-import { menuRoutes } from "./modules/menus/http/routes.js";
+import { menuMediaRoutes, menuRoutes } from "./modules/menus/http/routes.js";
 import {
   onlineOrderPublicRoutes,
   onlineOrderStaffRoutes,
@@ -69,6 +69,7 @@ export function createApp(
   api.use(identityRoutes(deps));
   api.use(qrOrderingRoutes(deps));
   api.use(onlineOrderPublicRoutes(deps));
+  api.use(menuMediaRoutes(deps));
   // Everything below requires an authenticated staff session (and CSRF on mutations).
   api.use(requireStaff(deps));
   api.use(tableRoutes(deps));

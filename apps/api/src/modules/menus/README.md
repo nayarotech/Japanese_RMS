@@ -13,4 +13,7 @@
 
 - Order item snapshots (`orders` copies name, price and tax category at order time).
 
+**Photos:** `images/` (one primary photo per item: validation and re-encoding, lifecycle, cleanup, public media
+route). See [docs/architecture/16-menu-item-images.md](../../../../../docs/architecture/16-menu-item-images.md).
+
 **Notes:** Price changes never alter existing orders. Menu reads are hot for QR/online, so this is a candidate for caching once measured.

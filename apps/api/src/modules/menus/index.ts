@@ -8,7 +8,11 @@
  */
 export type TaxChannel = "dine_in" | "takeout";
 import type { Tx } from "../../infrastructure/database/db.js";
+import type { ObjectStorage } from "../../infrastructure/storage/object-storage.js";
 import { Errors } from "../../shared/errors/app-error.js";
+import { type MenuImageView, toImageView } from "./images/index.js";
+
+export type { MenuImageView } from "./images/index.js";
 
 export interface LocalizedText {
   ja: string;
@@ -30,6 +34,8 @@ export interface MenuItemView {
   isActive: boolean;
   sortOrder: number;
   version: number;
+  /** Primary photo (delivery URLs + dimensions only), or null when the item has none (clients show a placeholder). */
+  image: MenuImageView | null;
 }
 
 export interface MenuCategoryView {
@@ -39,11 +45,15 @@ export interface MenuCategoryView {
   items: MenuItemView[];
 }
 
-/** Menu for a location. `publicView` returns only active categories/items (availability still shown). */
+/**
+ * Menu for a location. `publicView` returns only active categories/items (availability still shown).
+ * This is the single read model behind admin menu management, the POS, the table QR menu and online ordering,
+ * so every interface shows the same photo for an item.
+ */
 export async function getMenu(
   tx: Tx,
   locationId: string,
-  opts: { publicView: boolean },
+  opts: { publicView: boolean; storage: ObjectStorage },
 ): Promise<MenuCategoryView[]> {
   let catQuery = tx
     .selectFrom("menu_categories as c")
@@ -68,6 +78,9 @@ export async function getMenu(
     .leftJoin("menu_item_translations as ten", (j) =>
       j.onRef("ten.menu_item_id", "=", "i.id").on("ten.locale", "=", "en"),
     )
+    .leftJoin("menu_item_images as img", (j) =>
+      j.onRef("img.menu_item_id", "=", "i.id").on("img.status", "=", "active"),
+    )
     .select([
       "i.id",
       "i.category_id",
@@ -85,6 +98,12 @@ export async function getMenu(
       "tja.description as desc_ja",
       "ten.name as name_en",
       "ten.description as desc_en",
+      "img.storage_key as img_key",
+      "img.thumb_storage_key as img_thumb_key",
+      "img.width as img_width",
+      "img.height as img_height",
+      "img.thumb_width as img_thumb_width",
+      "img.thumb_height as img_thumb_height",
     ])
     .where("i.location_id", "=", locationId);
   if (opts.publicView) itemQuery = itemQuery.where("i.is_active", "=", true);
@@ -107,6 +126,17 @@ export async function getMenu(
       isActive: i.is_active,
       sortOrder: i.sort_order,
       version: i.version,
+      image:
+        i.img_key && i.img_thumb_key
+          ? toImageView(opts.storage, {
+              storage_key: i.img_key,
+              thumb_storage_key: i.img_thumb_key,
+              width: i.img_width ?? 0,
+              height: i.img_height ?? 0,
+              thumb_width: i.img_thumb_width ?? 0,
+              thumb_height: i.img_thumb_height ?? 0,
+            })
+          : null,
     };
     const list = byCategory.get(i.category_id) ?? [];
     list.push(view);

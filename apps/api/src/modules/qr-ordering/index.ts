@@ -34,7 +34,7 @@ export async function getPublicTable(deps: AppDeps, token: string, guest: GuestC
       findActiveSessionForTable(tx, ref.tableId),
       hasFeature(tx, ref.locationId, "table_qr_ordering"),
     ]);
-    const menu = await getMenu(tx, ref.locationId, { publicView: true });
+    const menu = await getMenu(tx, ref.locationId, { publicView: true, storage: deps.storage });
     const joined = guest !== null && active !== null && guest.tableSessionId === active.id;
     return {
       brand,
@@ -52,6 +52,7 @@ export async function getPublicTable(deps: AppDeps, token: string, guest: GuestC
           description: i.description,
           priceYen: i.priceYen,
           isAvailable: i.isAvailable,
+          image: i.image,
         })),
       })),
     };

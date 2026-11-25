@@ -23,6 +23,8 @@ export interface RateLimitConfig {
   onlineOrderPerPhone: RateLimitRule;
   onlineQuotePerIp: RateLimitRule;
   onlineTrackingPerIp: RateLimitRule;
+  menuImageUploadPerSession: RateLimitRule;
+  mediaReadPerIp: RateLimitRule;
 }
 
 export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
@@ -37,6 +39,10 @@ export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
   onlineOrderPerPhone: { points: 5, durationSeconds: 3600 },
   onlineQuotePerIp: { points: 60, durationSeconds: 60 },
   onlineTrackingPerIp: { points: 120, durationSeconds: 60 },
+  // Menu photos: uploads are CPU-heavy (re-encoding); reads are many small thumbnails per menu page, often from
+  // many guests behind one shop Wi-Fi address, and are normally absorbed by browser/CDN caches (immutable URLs).
+  menuImageUploadPerSession: { points: 30, durationSeconds: 600 },
+  mediaReadPerIp: { points: 1200, durationSeconds: 60 },
 };
 
 export type Limiter = (key: string) => Promise<void>;
@@ -80,6 +86,8 @@ export function createRateLimiters(
     onlineOrderPerPhone: make("onlineOrderPerPhone"),
     onlineQuotePerIp: make("onlineQuotePerIp"),
     onlineTrackingPerIp: make("onlineTrackingPerIp"),
+    menuImageUploadPerSession: make("menuImageUploadPerSession"),
+    mediaReadPerIp: make("mediaReadPerIp"),
   };
 }
 

@@ -7,6 +7,9 @@ dist/
 out/
 *.tsbuildinfo
 
+# Local development object storage (STORAGE_DRIVER=local)
+.data/
+
 # Test output
 coverage/
 playwright-report/

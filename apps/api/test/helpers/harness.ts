@@ -21,6 +21,10 @@ import {
 import type { Database } from "../../src/infrastructure/database/schema.js";
 import { createLogger } from "../../src/infrastructure/logging/logger.js";
 import { createRedis } from "../../src/infrastructure/redis/redis.js";
+import {
+  type MemoryStorage,
+  createMemoryStorage,
+} from "../../src/infrastructure/storage/object-storage.js";
 import { type Geocoder, createStaticDemoGeocoder } from "../../src/modules/integrations/index.js";
 import {
   DEFAULT_RATE_LIMITS,
@@ -39,6 +43,8 @@ export interface Harness {
   /** Runs a query in a tenant context as the RUNTIME role (RLS applies). */
   asTenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T>;
   deps: AppDeps;
+  /** In-memory object storage (inspect `objects`, inject failures with `failWith`). */
+  storage: MemoryStorage;
   app: ReturnType<typeof createApp>;
   migratorDb: Kysely<Database>;
   relayDb: Kysely<Database>;
@@ -64,7 +70,8 @@ export function migratorDbFor(config: ReturnType<typeof loadConfig>): Kysely<Dat
 export function createHarness(
   opts: { limits?: Partial<RateLimitConfig>; geocoder?: Geocoder } = {},
 ): Promise<Harness> {
-  const config = loadConfig(process.env);
+  const config = loadConfig({ ...process.env, STORAGE_DRIVER: "memory" });
+  const storage = createMemoryStorage(config);
   const db = createDb(
     createPool(config, {
       user: config.DATABASE_APP_USER,
@@ -91,11 +98,13 @@ export function createHarness(
     redis,
     logger: createLogger(config, "test"),
     limits,
+    storage,
     geocoder: opts.geocoder ?? createStaticDemoGeocoder(),
   };
   const migratorDb = migratorDbFor(config);
   return Promise.resolve({
     deps,
+    storage,
     asTenant: (tenantId, fn) => withTenantTransaction(db, { tenantId }, fn),
     app: createApp(deps),
     migratorDb,

@@ -13,6 +13,7 @@ import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LangToggle } from "../../../../../components/LangToggle";
+import { MenuItemImage } from "../../../../../components/MenuItemImage";
 import { PageHeader } from "../../../../../components/PageHeader";
 import {
   Badge,
@@ -248,9 +249,12 @@ export default function PosPage() {
                 onClick={() => addItem(i)}
                 className="overflow-hidden rounded-[12px] border border-[#e1e4e7] bg-white text-left disabled:opacity-50"
               >
-                <span className="flex h-[76px] items-center justify-center bg-brand-tint text-[28px] font-bold text-brand">
-                  {pickName(i.name, locale).slice(0, 1)}
-                </span>
+                <MenuItemImage
+                  image={i.image}
+                  name={pickName(i.name, locale)}
+                  className="h-[76px] w-full"
+                  letterClassName="text-[28px]"
+                />
                 <span className="block px-3 pt-2.5 text-[14px] font-medium">
                   {pickName(i.name, locale)}
                 </span>

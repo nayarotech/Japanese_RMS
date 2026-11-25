@@ -208,7 +208,37 @@
     "create": "作成",
     "takeoutTax": "持ち帰り・配達の税率",
     "sameAsDineIn": "店内と同じ",
-    "taxSummary": "店内 {dineIn}% / 持ち帰り {takeout}%"
+    "taxSummary": "店内 {dineIn}% / 持ち帰り {takeout}%",
+    "edit": "編集",
+    "editItem": "商品を編集",
+    "editNamed": "{name}を編集",
+    "photo": {
+      "label": "商品写真",
+      "choose": "写真を選択",
+      "drop": "クリックして選択、またはここに写真をドラッグ＆ドロップ",
+      "hint": "JPEG・PNG・WebP形式、{maxMb}MBまで。写真は自動で最適化されます。",
+      "replace": "写真を変更",
+      "remove": "写真を削除",
+      "undoRemove": "写真を残す",
+      "willRemove": "保存すると写真が削除されます。",
+      "newSelected": "新しい写真が選択されています。保存時にアップロードされます。",
+      "uploadingLabel": "写真のアップロード状況",
+      "uploading": "写真をアップロード中… {percent}%",
+      "processing": "写真を最適化しています…",
+      "none": "写真なし",
+      "preview": "写真のプレビュー",
+      "savedWithoutPhoto": "商品は保存されましたが、写真は保存されませんでした。{reason}",
+      "errors": {
+        "tooLarge": "ファイルサイズが{maxMb}MBを超えています。小さい写真を選択してください。",
+        "unsupported": "JPEG・PNG・WebP形式の画像を選択してください。",
+        "invalid": "この画像を読み込めませんでした。別のファイルを選択してください。",
+        "dimensions": "画像のサイズ（ピクセル数）が小さすぎるか大きすぎます。別の写真を選択してください。",
+        "busy": "写真の処理が混み合っています。しばらくしてからもう一度お試しください。",
+        "rateLimited": "写真の変更回数が多すぎます。数分待ってからもう一度お試しください。",
+        "storage": "現在写真を保存できません。もう一度お試しください。",
+        "generic": "写真を保存できませんでした。もう一度お試しください。"
+      }
+    }
   },
   "guest": {
     "table": "テーブル {name}",

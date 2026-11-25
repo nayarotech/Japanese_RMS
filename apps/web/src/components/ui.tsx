@@ -98,7 +98,7 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-md rounded-[16px] bg-white p-5 shadow-xl"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-[16px] bg-white p-5 shadow-xl"
         onClick={(e) => {
           e.stopPropagation();
         }}

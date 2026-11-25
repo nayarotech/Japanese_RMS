@@ -37,6 +37,29 @@ export interface LocalizedName {
   en: string | null;
 }
 
+/**
+ * Menu item photo: delivery URLs and dimensions only (never binaries or storage credentials).
+ * `thumbUrl` (longest side about 320 px) is for menu lists, QR menus and POS tiles; `url` (up to 1200 px) for
+ * large previews. Both are WebP and immutable (a new photo always gets a new URL).
+ */
+export interface MenuImageDto {
+  url: string;
+  thumbUrl: string;
+  width: number;
+  height: number;
+  thumbWidth: number;
+  thumbHeight: number;
+}
+
+/**
+ * Upload rules for menu photos (the API enforces them; the web app checks them first for instant feedback).
+ * Upload: `PUT /api/v1/menu/items/:id/image` with the raw file bytes as the body and one of these content types.
+ */
+export const MENU_IMAGE_ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+export type MenuImageSourceType = (typeof MENU_IMAGE_ACCEPTED_TYPES)[number];
+/** Default server limit (`MENU_IMAGE_MAX_BYTES`). */
+export const MENU_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
 export interface MenuItemDto {
   id: string;
   categoryId: string;
@@ -53,6 +76,8 @@ export interface MenuItemDto {
   isActive: boolean;
   sortOrder: number;
   version: number;
+  /** Primary photo, or null (clients show a placeholder). */
+  image: MenuImageDto | null;
 }
 
 export interface MenuCategoryDto {
@@ -259,6 +284,7 @@ export interface PublicTableResponse {
       description: { ja: string | null; en: string | null };
       priceYen: number;
       isAvailable: boolean;
+      image: MenuImageDto | null;
     }[];
   }[];
 }

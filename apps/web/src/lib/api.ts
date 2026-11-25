@@ -19,10 +19,20 @@ export interface ApiClient {
   setCsrf(token: string | null): void;
   get<T>(path: string): Promise<T>;
   send<T>(
-    method: "POST" | "PATCH" | "PUT",
+    method: "POST" | "PATCH" | "PUT" | "DELETE",
     path: string,
     body?: unknown,
     opts?: { idempotencyKey?: string },
+  ): Promise<T>;
+  /**
+   * Sends a file as the raw request body (PUT). Reports upload progress as a fraction 0..1.
+   * The browser never chooses a storage location: the API generates opaque keys server-side.
+   */
+  upload<T>(
+    path: string,
+    file: Blob,
+    contentType: string,
+    onProgress?: (fraction: number) => void,
   ): Promise<T>;
 }
 
@@ -69,12 +79,57 @@ export function createApiClient(): ApiClient {
     return json as T;
   }
 
+  function upload<T>(
+    path: string,
+    file: Blob,
+    contentType: string,
+    onProgress?: (fraction: number) => void,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      // XMLHttpRequest (not fetch) because only it reports upload progress in all browsers.
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", `/api/v1${path}`); // same origin: the HttpOnly session cookie is sent automatically
+      xhr.setRequestHeader("Accept", "application/json");
+      xhr.setRequestHeader("Content-Type", contentType);
+      if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+      };
+      xhr.onerror = () => {
+        reject(new ApiError(0, "network_error", "Network error"));
+      };
+      xhr.onload = () => {
+        let json: unknown = null;
+        try {
+          json = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+        } catch {
+          /* non-JSON error page from a proxy */
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(json as T);
+          return;
+        }
+        const err = (json as ApiErrorBody | null)?.error;
+        reject(
+          new ApiError(
+            xhr.status,
+            err?.code ?? (xhr.status === 413 ? "image_too_large" : "http_error"),
+            err?.message ?? xhr.statusText,
+            err?.details,
+          ),
+        );
+      };
+      xhr.send(file);
+    });
+  }
+
   return {
     setCsrf: (t) => {
       csrf = t;
     },
     get: (path) => request("GET", path),
     send: (method, path, body, opts) => request(method, path, body ?? {}, opts?.idempotencyKey),
+    upload,
   };
 }
 

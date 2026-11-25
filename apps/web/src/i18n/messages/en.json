@@ -208,7 +208,37 @@
     "create": "Create",
     "takeoutTax": "Takeout / delivery tax",
     "sameAsDineIn": "Same as dine-in",
-    "taxSummary": "Dine-in {dineIn}% / Takeout {takeout}%"
+    "taxSummary": "Dine-in {dineIn}% / Takeout {takeout}%",
+    "edit": "Edit",
+    "editItem": "Edit item",
+    "editNamed": "Edit {name}",
+    "photo": {
+      "label": "Menu item photo",
+      "choose": "Choose a photo",
+      "drop": "Click to select, or drag and drop a photo here",
+      "hint": "JPEG, PNG or WebP, up to {maxMb} MB. The photo is optimized automatically.",
+      "replace": "Replace photo",
+      "remove": "Remove photo",
+      "undoRemove": "Keep photo",
+      "willRemove": "The photo will be removed when you save.",
+      "newSelected": "New photo selected. It is uploaded when you save.",
+      "uploadingLabel": "Photo upload progress",
+      "uploading": "Uploading photo… {percent}%",
+      "processing": "Optimizing photo…",
+      "none": "No photo",
+      "preview": "Photo preview",
+      "savedWithoutPhoto": "The item was saved, but the photo was not. {reason}",
+      "errors": {
+        "tooLarge": "This file is larger than {maxMb} MB. Please choose a smaller photo.",
+        "unsupported": "Please choose a JPEG, PNG or WebP image.",
+        "invalid": "This image could not be read. Please choose another file.",
+        "dimensions": "This image is too small or too large (in pixels). Please choose another photo.",
+        "busy": "Many photos are being processed. Please try again in a moment.",
+        "rateLimited": "Too many photo changes. Please wait a few minutes and try again.",
+        "storage": "The photo could not be saved right now. Please try again.",
+        "generic": "The photo could not be saved. Please try again."
+      }
+    }
   },
   "guest": {
     "table": "Table {name}",

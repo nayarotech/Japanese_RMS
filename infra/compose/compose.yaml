@@ -66,6 +66,9 @@ services:
     environment:
       POSTGRES_HOST: postgres
       REDIS_URL: redis://redis:6379
+      # The container filesystem is read-only; local-driver menu photos go to the tmpfs and are lost on restart.
+      # Use STORAGE_DRIVER=s3 for anything beyond a local demo (docs/architecture/16-menu-item-images.md).
+      STORAGE_LOCAL_DIR: /tmp/storage
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

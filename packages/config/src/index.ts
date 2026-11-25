@@ -62,6 +62,30 @@ const EnvSchema = z.object({
   GEOCODER_PROVIDER: z.enum(["disabled", "static_demo"]).default("disabled"),
   GEOCODER_TIMEOUT_MS: z.coerce.number().int().min(200).max(10_000).default(3000),
   DEFAULT_TIME_ZONE: z.string().default("Asia/Tokyo"),
+
+  // Object storage for menu item photos (docs/architecture/16-menu-item-images.md). Binaries never go to PostgreSQL.
+  // "s3" = any S3-compatible service (required in staging/production); "local" = a directory on this machine
+  // (single-host development only); "memory" = in-process (tests only).
+  STORAGE_DRIVER: z.enum(["s3", "local", "memory"]).default("local"),
+  STORAGE_LOCAL_DIR: z.string().min(1).default(".data/storage"),
+  STORAGE_ENDPOINT: z.string().optional(),
+  STORAGE_REGION: z.string().min(1).default("ap-northeast-1"),
+  STORAGE_BUCKET: z.string().optional(),
+  STORAGE_ACCESS_KEY_ID: z.string().optional(),
+  STORAGE_SECRET_ACCESS_KEY: z.string().optional(),
+  STORAGE_FORCE_PATH_STYLE: bool.default(false),
+  // Public delivery base URL (CDN or public-read bucket) for stored objects, without a trailing slash.
+  // Empty = images are served by the API at /api/v1/public/media/* (works behind the same-origin load balancer).
+  STORAGE_PUBLIC_BASE_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.replace(/\/+$/, "") : undefined)),
+  MENU_IMAGE_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(100_000)
+    .max(20 * 1024 * 1024)
+    .default(5 * 1024 * 1024),
 });
 
 export type AppConfig = Readonly<z.infer<typeof EnvSchema>>;
@@ -88,8 +112,23 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     if (!cfg.REDIS_TLS) problems.push("REDIS_TLS must be true");
     if (cfg.GEOCODER_PROVIDER === "static_demo")
       problems.push("GEOCODER_PROVIDER=static_demo is for development and tests only");
+    if (cfg.STORAGE_DRIVER !== "s3")
+      problems.push(
+        "STORAGE_DRIVER must be s3 (local/memory storage is not shared across replicas)",
+      );
+    if (cfg.STORAGE_PUBLIC_BASE_URL && !cfg.STORAGE_PUBLIC_BASE_URL.startsWith("https://"))
+      problems.push("STORAGE_PUBLIC_BASE_URL must use https");
     if (problems.length > 0)
       throw new ConfigError(`Unsafe ${cfg.APP_ENV} configuration: ${problems.join("; ")}`);
   }
+  if (cfg.STORAGE_DRIVER === "s3" && !cfg.STORAGE_BUCKET)
+    throw new ConfigError("STORAGE_DRIVER=s3 requires STORAGE_BUCKET");
+  // Static keys are optional (the SDK's default chain, e.g. a task role, is preferred) but must come as a pair.
+  if (Boolean(cfg.STORAGE_ACCESS_KEY_ID) !== Boolean(cfg.STORAGE_SECRET_ACCESS_KEY))
+    throw new ConfigError(
+      "STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY must be set together",
+    );
+  if (cfg.STORAGE_DRIVER === "memory" && cfg.APP_ENV !== "test")
+    throw new ConfigError("STORAGE_DRIVER=memory is for tests only");
   return Object.freeze(cfg);
 }

@@ -8,6 +8,7 @@ import type { GuestSessionResponse, PublicTableResponse } from "@restaurant-plat
 import { useLocale, useTranslations } from "next-intl";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MenuItemImage } from "../../../components/MenuItemImage";
 import { LangToggle } from "../../../components/LangToggle";
 import { Banner, Spinner, Stepper } from "../../../components/ui";
 import { ApiError, errorKey, guestApi, newIdempotencyKey } from "../../../lib/api";
@@ -275,9 +276,11 @@ export default function GuestMenuPage() {
             <ul className="px-4">
               {items.map((i) => (
                 <li key={i.id} className="flex items-center gap-3 border-b border-line-soft py-3">
-                  <span className="flex size-[72px] shrink-0 items-center justify-center rounded-[12px] bg-brand-tint text-[24px] font-bold text-brand">
-                    {pickName(i.name, locale).slice(0, 1)}
-                  </span>
+                  <MenuItemImage
+                    image={i.image}
+                    name={pickName(i.name, locale)}
+                    className="size-[72px] rounded-[12px]"
+                  />
                   <div className="min-w-0 flex-1">
                     <p className="text-[16px] font-semibold">{pickName(i.name, locale)}</p>
                     {(locale === "en" ? i.description.en : i.description.ja) && (

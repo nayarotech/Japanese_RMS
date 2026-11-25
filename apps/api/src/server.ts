@@ -10,6 +10,7 @@ import { createDb, createPool } from "./infrastructure/database/db.js";
 import { createLogger } from "./infrastructure/logging/logger.js";
 import { createRedis } from "./infrastructure/redis/redis.js";
 import { DEFAULT_RATE_LIMITS, createRateLimiters } from "./infrastructure/security/rate-limit.js";
+import { createObjectStorage } from "./infrastructure/storage/object-storage.js";
 import { createSocketServer } from "./infrastructure/websocket/socket-server.js";
 import { createGeocoder } from "./modules/integrations/index.js";
 
@@ -31,6 +32,7 @@ const deps: AppDeps = {
   redis,
   logger,
   limits: createRateLimiters(redis, DEFAULT_RATE_LIMITS),
+  storage: createObjectStorage(config),
   geocoder: createGeocoder(config),
 };
 const state: AppState = { shuttingDown: false };
