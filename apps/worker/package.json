@@ -15,7 +15,7 @@
     "@restaurant-platform/config": "workspace:*",
     "@socket.io/redis-emitter": "5.1.0",
     "ioredis": "6.0.0",
-    "kysely": "0.29.8",
+    "kysely": "0.29.9",
     "pg": "8.23.1",
     "pino": "10.4.0"
   },
