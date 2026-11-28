@@ -43,6 +43,48 @@ export async function listTaxRates(
     .selectFrom("tax_rates")
     .select(["id", "code", "rate_bp"])
     .where("location_id", "=", locationId)
+    .orderBy("rate_bp")
+    .orderBy("code")
     .execute();
   return rows.map((r) => ({ id: r.id, code: r.code, rateBp: r.rate_bp }));
+}
+
+/**
+ * Returns this location's tax rate for `rateBp`, creating a `custom_<bp>` rate when none exists yet. Lets managers
+ * enter a new consumption-tax percentage without a deploy. Rates are never edited in place: order lines snapshot
+ * `tax_rate_bp`, and reusing a row by value keeps the list free of duplicates.
+ */
+export async function ensureTaxRate(
+  tx: Tx,
+  tenantId: string,
+  locationId: string,
+  rateBp: number,
+): Promise<{ id: string; code: string; rateBp: number; created: boolean }> {
+  const find = () =>
+    tx
+      .selectFrom("tax_rates")
+      .select(["id", "code", "rate_bp"])
+      .where("location_id", "=", locationId)
+      .where("rate_bp", "=", rateBp)
+      .orderBy("created_at")
+      .executeTakeFirst();
+  const existing = await find();
+  if (existing)
+    return { id: existing.id, code: existing.code, rateBp: existing.rate_bp, created: false };
+
+  const inserted = await tx
+    .insertInto("tax_rates")
+    .values({
+      tenant_id: tenantId,
+      location_id: locationId,
+      code: `custom_${String(rateBp)}`,
+      rate_bp: rateBp,
+    })
+    // A concurrent request may have created the same rate: fall back to reading it.
+    .onConflict((oc) => oc.columns(["location_id", "code"]).doNothing())
+    .returning(["id", "code", "rate_bp"])
+    .executeTakeFirst();
+  const row = inserted ?? (await find());
+  if (!row) throw Errors.conflict("tax_rate_conflict", "Could not create the tax rate");
+  return { id: row.id, code: row.code, rateBp: row.rate_bp, created: inserted !== undefined };
 }

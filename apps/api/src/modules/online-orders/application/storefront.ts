@@ -20,6 +20,7 @@ import {
   voidOrder,
 } from "../../orders/index.js";
 import { type LocationSettings, getLocationSettings } from "../../restaurants/index.js";
+import { getFeaturedItemIds, getStorefrontProfile } from "../../storefront/index.js";
 import { type FeeTier, cleanText, deliveryRadiusM, normalizePhone } from "../domain/delivery.js";
 import { type HoursWindow, isOpenAt, pickupSlots } from "../domain/schedule.js";
 import {
@@ -159,16 +160,24 @@ export async function getStorefront(deps: AppDeps, token: string, now = new Date
   const ref = await resolveStoreLink(deps.db, token);
   if (!ref) throw Errors.notFound("store");
   return withTenantTransaction(deps.db, { tenantId: ref.tenantId }, async (tx) => {
-    const store = await loadStore(tx, ref);
+    const [store, profile] = await Promise.all([
+      loadStore(tx, ref),
+      getStorefrontProfile(tx, ref.locationId, deps.storage),
+    ]);
     const a = availability(store, deps.geocoder.enabled, now);
     const base = {
       brand: store.brand,
       location: { name: store.location.name, timeZone: store.location.timeZone },
+      profile,
       state: a.state,
     };
     if (a.state === "unavailable")
-      return { ...base, menu: [], pickup: null, delivery: null, hours: [] };
-    const menu = await getMenu(tx, ref.locationId, { publicView: true, storage: deps.storage });
+      return { ...base, menu: [], featuredItemIds: [], pickup: null, delivery: null, hours: [] };
+    const [menu, featured] = await Promise.all([
+      getMenu(tx, ref.locationId, { publicView: true, storage: deps.storage }),
+      getFeaturedItemIds(tx, ref.locationId),
+    ]);
+    const publicIds = new Set(menu.flatMap((c) => c.items.map((i) => i.id)));
     return {
       ...base,
       hours: store.hours,
@@ -205,6 +214,8 @@ export async function getStorefront(deps: AppDeps, token: string, now = new Date
           })),
         }))
         .filter((c) => c.items.length > 0),
+      // Restaurant-chosen (manual) features, limited to items customers can actually see.
+      featuredItemIds: featured.filter((id) => publicIds.has(id)),
     };
   });
 }
@@ -531,15 +542,24 @@ export async function getTrackingView(deps: AppDeps, customer: CustomerContext) 
       .executeTakeFirst();
     if (!r) throw Errors.notFound("online order");
     const row = toRow(r);
-    const [location, brand, items] = await Promise.all([
+    const [location, brand, items, profile] = await Promise.all([
       getLocationSettings(tx, row.locationId),
       getTenantBrand(tx, row.tenantId),
       getOrderItems(tx, row.orderId),
+      getStorefrontProfile(tx, row.locationId, deps.storage),
     ]);
     // Deliberately NO customer personal data (name, phone, address): the link may be forwarded.
+    // The restaurant's own public presentation and phone are included so the customer can reach the store.
     return {
       store: { name: location.name, timeZone: location.timeZone },
       brand,
+      profile: {
+        displayName: profile.displayName,
+        logo: profile.logo,
+        phone: profile.phone,
+        accentColor: profile.accentColor,
+        address: profile.address,
+      },
       onlineOrderId: row.id,
       orderNo: row.orderNo,
       fulfillmentType: row.fulfillmentType,

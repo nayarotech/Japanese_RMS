@@ -86,9 +86,16 @@ are the same states in lower case (the codebase convention). Rules (`domain/stat
   unknown address → `422 address_not_found`; only city/prefecture precision → `422 address_not_precise`; outside the radius →
   `422 outside_delivery_area`; no provider configured → delivery is shown as unavailable, `409 delivery_unavailable`.
 - Minimum order: max(store minimum, delivery zone minimum) on the **item** subtotal.
+- Staff settings show the delivery area on a **Leaflet** map (store pin + one circle per tier). Clicking the map or dragging the
+  pin sets the store location; the latitude/longitude inputs remain the keyboard path. The map is staff-only and never used for
+  customer addresses. Tiles: `NEXT_PUBLIC_MAP_TILE_URL` / `NEXT_PUBLIC_MAP_ATTRIBUTION` (default: OpenStreetMap's public tile
+  server, which is fine for light staff use; set a commercial or self-hosted provider before heavy traffic).
 
 ## Money and tax (PENDING accountant approval)
 
+- Tax rates are per location (`tax_rates`, basis points). Besides the seeded 8%/10%, a manager can type a percentage on a menu
+  item (`POST /menu/tax-rates { rateBp }`): an existing rate with that value is reused, otherwise a `custom_<bp>` rate is created
+  (audited). Rates are never edited in place; order lines snapshot `tax_rate_bp`, so a rate change only affects new orders.
 - Takeout/delivery food uses the item's takeout rate (fixtures: food and soft drinks 8%, alcohol 10%); the delivery fee is taxed at the
   location's `standard` rate (else its highest rate). Tax is computed per rate per order with the location rounding mode.
 - The customer sends the total they reviewed (`expectedTotalYen`); it is compared, never used. A mismatch returns `409 total_changed`.

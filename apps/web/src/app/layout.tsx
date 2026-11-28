@@ -26,7 +26,13 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#181d20" };
+// viewportFit "cover" enables env(safe-area-inset-*) so sticky bars clear the iPhone home indicator.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#181d20",
+  viewportFit: "cover",
+};
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const [locale, brand] = await Promise.all([getLocale(), getBrand()]);

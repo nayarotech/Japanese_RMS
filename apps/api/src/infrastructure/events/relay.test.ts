@@ -26,6 +26,16 @@ describe("routeEvent", () => {
     });
     expect(unassigned[0]?.rooms).toEqual(["t:T:l:L:floor"]);
   });
+  it("sends pickup acknowledgements to floor, kitchen and staff of that location only (never guests)", () => {
+    const d = routeEvent({
+      ...base,
+      event_type: "waiter.food.picked_up",
+      payload: { ticketId: "k", tableSessionId: "S", kitchenItemIds: ["i"] },
+    });
+    expect(d).toEqual([
+      { rooms: ["t:T:l:L:floor", "t:T:l:L:kitchen", "t:T:l:L:staff"], payload: expect.any(Object) },
+    ]);
+  });
   it("gives guests only an id-only refresh hint for their own session", () => {
     const d = routeEvent({
       ...base,

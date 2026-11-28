@@ -216,6 +216,48 @@ export interface ReadyItemDto {
   readyAt: string;
 }
 
+/** One outstanding dine-in dish on the Floor board (ready, or still with the kitchen). */
+export interface FloorItemDto {
+  kitchenItemId: string;
+  ticketId: string;
+  orderNo: number;
+  tableSessionId: string;
+  tableName: string;
+  nameJa: string;
+  nameEn: string | null;
+  quantity: number;
+  note: string | null;
+  status: "queued" | "preparing" | "ready";
+  orderedAt: string;
+  startedAt: string | null;
+  readyAt: string | null;
+  /** Pickup acknowledgement (the item stays "ready" until it is served). */
+  pickedUp: { at: string; byUserId: string; byName: string } | null;
+}
+
+export interface FloorTableServiceDto {
+  tableSessionId: string;
+  tableId: string;
+  tableName: string;
+  status: "open" | "bill_requested";
+  guestCount: number;
+  openedAt: string;
+  assignedWaiterId: string | null;
+  /** Portions (quantities). */
+  readyCount: number;
+  preparingCount: number;
+  servedCount: number;
+}
+
+/** GET /floor/board: the waiter dashboard, read from PostgreSQL (no money, no customer data). */
+export interface FloorBoardResponse {
+  serverTime: string;
+  counts: { ready: number; preparing: number; activeTables: number };
+  ready: FloorItemDto[];
+  preparing: FloorItemDto[];
+  tables: FloorTableServiceDto[];
+}
+
 export interface CheckoutResultDto {
   paymentId: string;
   receiptId: string;
@@ -268,9 +310,35 @@ export interface AdminTableDto {
   version: number;
 }
 
+/**
+ * Restaurant-level presentation of a branch (within the partner brand). All text is plain text: render it as text,
+ * never as HTML. Null fields are not configured; fall back to the location name / no image.
+ */
+export interface StorefrontProfileDto {
+  displayName: string | null;
+  description: { ja: string | null; en: string | null };
+  announcement: { ja: string | null; en: string | null };
+  phone: string | null;
+  address: { ja: string | null; en: string | null };
+  /** #rrggbb with at least 4.5:1 contrast against white (validated by the API). */
+  accentColor: string | null;
+  logo: MenuImageDto | null;
+  cover: MenuImageDto | null;
+}
+
+export interface StorefrontSettingsResponse {
+  /** 0 until the first save. */
+  version: number;
+  profile: StorefrontProfileDto;
+  featuredItemIds: string[];
+}
+
+export const STOREFRONT_MAX_FEATURED = 8;
+
 export interface PublicTableResponse {
   brand: PublicBrand;
   location: { name: string };
+  profile: Pick<StorefrontProfileDto, "displayName" | "logo" | "accentColor" | "announcement">;
   table: { name: string };
   orderingEnabled: boolean;
   sessionState: "none" | TableSessionStatus;
@@ -293,6 +361,14 @@ export interface GuestSessionResponse {
   table: { name: string };
   sessionStatus: TableSessionStatus;
   csrfToken: string;
+  /** Running bill of this dining session (settled with staff at the register). */
+  bill: {
+    subtotalYen: number;
+    taxBreakdown: { rateBp: number; baseYen: number; taxYen: number }[];
+    taxTotalYen: number;
+    totalYen: number;
+    pricesIncludeTax: boolean;
+  };
   orders: {
     id: string;
     orderNo: number;
@@ -321,6 +397,7 @@ export const REALTIME_EVENTS = [
   "kitchen.item.status_changed",
   "waiter.food.ready",
   "waiter.food.served",
+  "waiter.food.picked_up",
   "checkout.completed",
   "online.order.created",
   "online.order.accepted",
@@ -378,7 +455,10 @@ export interface TaxBreakdownDto {
 export interface StorefrontResponse {
   brand: PublicBrand;
   location: { name: string; timeZone: string };
+  profile: StorefrontProfileDto;
   state: StoreState;
+  /** Restaurant-chosen featured dishes (ids into `menu`), in display order. Manual selection, not popularity. */
+  featuredItemIds: string[];
   hours: HoursWindowDto[];
   minOrderYen?: number;
   checkoutNote?: { ja: string | null; en: string | null };
@@ -428,6 +508,7 @@ export interface OnlineOrderPlacedDto {
 export interface OnlineTrackingDto {
   store: { name: string; timeZone: string };
   brand: PublicBrand;
+  profile: Pick<StorefrontProfileDto, "displayName" | "logo" | "phone" | "accentColor" | "address">;
   onlineOrderId: string;
   orderNo: number;
   fulfillmentType: FulfillmentType;

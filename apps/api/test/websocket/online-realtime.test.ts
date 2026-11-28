@@ -219,7 +219,6 @@ describe("reconnection", () => {
     const ticket = (await kitchen.get("/kitchen/tickets")).body.tickets.find(
       (t: { orderId: string }) => t.orderId === detail.orderId,
     );
-    await kitchen.post(`/kitchen/tickets/${ticket.id}/start`);
     await kitchen.post(`/kitchen/tickets/${ticket.id}/ready`);
     await relay(); // events emitted while nobody listened are lost, by design
 

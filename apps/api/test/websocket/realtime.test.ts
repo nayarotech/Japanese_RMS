@@ -200,7 +200,6 @@ describe("waiter notifications and reconciliation", () => {
       { "Idempotency-Key": randomUUID() },
     );
     const first = order.body.items[0];
-    await kitchen.post(`/kitchen/items/${first.kitchenItemId}/start`);
     return { session, kitchen, first };
   }
 
@@ -240,6 +239,45 @@ describe("waiter notifications and reconciliation", () => {
     expect(await alert).toMatchObject({ tableName: "A-5", assignedWaiterId: null });
     await new Promise((r) => setTimeout(r, 200));
     expect(cashierSeen).not.toContain("waiter.food.ready");
+  });
+
+  it("Floor devices stay in sync across instances: ready, picked up and served reach every waiter, not tenant B", async () => {
+    const waiter = await loginStaff(h.app, A.users.waiter.email, TEST_PASSWORD);
+    const manager = await loginStaff(h.app, A.users.manager.email, TEST_PASSWORD);
+    const bWaiter = await loginStaff(h.app, B.users.waiter.email, TEST_PASSWORD);
+    const { kitchen, first } = await setupReadyFlow(waiter, 8); // C-1 (A-tables are used by other tests)
+    const waiterSocket = socketFor(one, waiter.cookie);
+    const managerSocket = socketFor(two, manager.cookie); // a second waiter device on the other instance
+    const bSocket = socketFor(one, bWaiter.cookie);
+    await Promise.all([connected(waiterSocket), connected(managerSocket), connected(bSocket)]);
+    await relay();
+    const bSeen = collectAll(bSocket);
+
+    const readyOnOther = nextEvent(managerSocket, "kitchen.item.status_changed");
+    await kitchen.post(`/kitchen/items/${first.kitchenItemId}/ready`);
+    await relay();
+    expect(await readyOnOther).toMatchObject({ status: "ready" });
+
+    const pickedOnOther = nextEvent(managerSocket, "waiter.food.picked_up");
+    expect(
+      (await waiter.post("/floor/items/pickup", { kitchenItemIds: [first.kitchenItemId] })).status,
+    ).toBe(200);
+    await relay();
+    expect(await pickedOnOther).toMatchObject({ kitchenItemIds: [first.kitchenItemId] });
+
+    const servedOnOther = nextEvent(managerSocket, "waiter.food.served");
+    expect(
+      (await waiter.post("/floor/items/serve", { kitchenItemIds: [first.kitchenItemId] })).status,
+    ).toBe(200);
+    await relay();
+    expect(await servedOnOther).toMatchObject({ kitchenItemIds: [first.kitchenItemId] });
+    // The other device's next read no longer offers the food.
+    const board = await manager.get("/floor/board");
+    expect(
+      (board.body.ready as { kitchenItemId: string }[]).map((i) => i.kitchenItemId),
+    ).not.toContain(first.kitchenItemId);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(bSeen).toEqual([]);
   });
 
   it("a waiter who was offline when food became ready recovers it from the backend after reconnecting", async () => {

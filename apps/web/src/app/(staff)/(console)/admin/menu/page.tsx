@@ -32,6 +32,25 @@ interface ItemFields {
   nameEn: string | null;
 }
 
+/** Select value meaning "enter the percentage by hand" (tax law changes faster than releases). */
+const CUSTOM_TAX = "__custom";
+
+/** Percent text ("8", "10", "8.5") to basis points; null when not a valid 0–100% with at most 2 decimals. */
+function percentToBp(text: string): number | null {
+  if (!/^\d{1,3}(\.\d{1,2})?$/.test(text.trim())) return null;
+  const bp = Math.round(Number(text) * 100);
+  return bp >= 0 && bp <= 10_000 ? bp : null;
+}
+
+/** Replaces a "custom" tax choice with the id of the matching rate, creating that rate if needed. */
+async function resolveTaxRate(f: FormData, name: string): Promise<void> {
+  if (f.get(name) !== CUSTOM_TAX) return;
+  const bp = percentToBp(field(f, `${name}Custom`));
+  if (bp === null) throw new Error("invalid tax percent");
+  const rate = await staffApi.send<{ id: string }>("POST", "/menu/tax-rates", { rateBp: bp });
+  f.set(name, rate.id);
+}
+
 function readFields(f: FormData): ItemFields {
   return {
     categoryId: field(f, "categoryId"),
@@ -216,12 +235,15 @@ function ItemDialog({
 
   async function save(e: FormSubmitEvent) {
     e.preventDefault();
-    const fields = readFields(new FormData(e.currentTarget));
+    const form = new FormData(e.currentTarget);
     setSaving(true);
     setError(null);
 
     let itemId = item?.id ?? null;
     try {
+      await resolveTaxRate(form, "taxRateId");
+      await resolveTaxRate(form, "takeoutTaxRateId");
+      const fields = readFields(form);
       if (!item) {
         itemId = (await staffApi.send<{ id: string }>("POST", "/menu/items", fields)).id;
       } else if (fieldsChanged(fields, item)) {
@@ -328,31 +350,21 @@ function ItemDialog({
             ))}
           </select>
         </label>
-        <label className="block text-[14px] font-medium">
-          {t("adminMenu.tax")}
-          <select name="taxRateId" defaultValue={item?.taxRateId} className={inputClass}>
-            {menu.taxRates.map((r) => (
-              <option key={r.id} value={r.id}>
-                {ratePercent(r.rateBp)}% ({r.code})
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block text-[14px] font-medium">
-          {t("adminMenu.takeoutTax")}
-          <select
-            name="takeoutTaxRateId"
-            defaultValue={item?.takeoutTaxRateId ?? ""}
-            className={inputClass}
-          >
-            <option value="">{t("adminMenu.sameAsDineIn")}</option>
-            {menu.taxRates.map((r) => (
-              <option key={r.id} value={r.id}>
-                {ratePercent(r.rateBp)}% ({r.code})
-              </option>
-            ))}
-          </select>
-        </label>
+        <TaxRateField
+          name="taxRateId"
+          label={t("adminMenu.tax")}
+          rates={menu.taxRates}
+          defaultValue={item?.taxRateId ?? menu.taxRates[0]?.id ?? CUSTOM_TAX}
+          inputClass={inputClass}
+        />
+        <TaxRateField
+          name="takeoutTaxRateId"
+          label={t("adminMenu.takeoutTax")}
+          rates={menu.taxRates}
+          defaultValue={item?.takeoutTaxRateId ?? ""}
+          sameAsDineIn
+          inputClass={inputClass}
+        />
         {error && <Banner>{error}</Banner>}
         <div className="grid grid-cols-2 gap-2 pt-1">
           <Button className="h-12" onClick={onClose} disabled={saving}>
@@ -364,5 +376,70 @@ function ItemDialog({
         </div>
       </form>
     </Dialog>
+  );
+}
+
+/** A tax-rate select over the store's rates, plus "Other rate" which reveals a percentage input. */
+function TaxRateField({
+  name,
+  label,
+  rates,
+  defaultValue,
+  sameAsDineIn = false,
+  inputClass,
+}: {
+  name: string;
+  label: string;
+  rates: StaffMenuResponse["taxRates"];
+  defaultValue: string;
+  sameAsDineIn?: boolean;
+  inputClass: string;
+}) {
+  const t = useTranslations();
+  const [value, setValue] = useState(defaultValue);
+  return (
+    <div className="space-y-2">
+      <label className="block text-[14px] font-medium">
+        {label}
+        <select
+          name={name}
+          value={value}
+          onChange={(e) => setValue(e.currentTarget.value)}
+          className={inputClass}
+        >
+          {sameAsDineIn && <option value="">{t("adminMenu.sameAsDineIn")}</option>}
+          {rates.map((r) => (
+            <option key={r.id} value={r.id}>
+              {ratePercent(r.rateBp)}% ({r.code})
+            </option>
+          ))}
+          <option value={CUSTOM_TAX}>{t("adminMenu.customTax")}</option>
+        </select>
+      </label>
+      {value === CUSTOM_TAX && (
+        <label className="block text-[13px] font-medium text-ink-2">
+          {t("adminMenu.customTaxPercent")}
+          <div className="relative">
+            <input
+              name={`${name}Custom`}
+              type="number"
+              inputMode="decimal"
+              min={0}
+              max={100}
+              step={0.01}
+              required
+              autoFocus
+              className={`${inputClass} pr-9`}
+            />
+            <span className="pointer-events-none absolute top-1/2 right-3 mt-0.5 -translate-y-1/2 text-muted">
+              %
+            </span>
+          </div>
+          <span className="mt-1 block text-[12px] font-normal text-muted">
+            {t("adminMenu.customTaxHint")}
+          </span>
+        </label>
+      )}
+    </div>
   );
 }

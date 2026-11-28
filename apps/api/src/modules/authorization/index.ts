@@ -28,6 +28,8 @@ export const PERMISSIONS = [
   "online_orders.cancel", // cancel an accepted order (manager decision)
   "online_orders.contact_view", // customer name, phone and delivery address
   "online_settings.manage", // ordering hours, delivery area, pause/resume, storefront link
+  // Restaurant-level customer presentation (within the partner brand): name, description, logo, cover, featured items
+  "storefront.manage",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 

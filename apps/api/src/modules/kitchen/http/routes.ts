@@ -8,14 +8,19 @@ import { requireFeature } from "../../entitlements/index.js";
 import { staff } from "../../identity/http/middleware.js";
 import {
   type KitchenTicketObserver,
+  acknowledgePickup,
   applyKitchenAction,
+  getFloorBoard,
   isOnlineSource,
   listOpenTickets,
   listReadyItems,
+  serveFloorItems,
 } from "../index.js";
 
 const Id = z.uuid();
 const KitchenAction = z.enum(["start", "ready"]);
+/** Explicit item targets for waiter actions (a table's ready food may span several orders/tickets). */
+const FloorItemsBody = z.strictObject({ kitchenItemIds: z.array(z.uuid()).min(1).max(50) });
 
 export interface KitchenHooks {
   /** Runs in the same transaction after a kitchen action on an ONLINE order's ticket (wired in app.ts). */
@@ -74,6 +79,42 @@ export function kitchenRoutes(deps: AppDeps, hooks: KitchenHooks = {}): Router {
         return listReadyItems(tx, ctx.locationId);
       }),
     });
+  });
+
+  /** Waiter dashboard: ready food, food in preparation and occupied tables' service state (PostgreSQL). */
+  r.get("/floor/board", async (req, res) => {
+    const ctx = staff(req);
+    requirePermission(ctx, "floor.view");
+    const board = await withTenantTransaction(deps.db, ctx, async (tx) => {
+      await requireFeature(tx, ctx.locationId, "kitchen_workflow");
+      return getFloorBoard(tx, ctx.locationId);
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json(board);
+  });
+
+  /** "I have taken this from the kitchen" (the items stay ready until served). */
+  r.post("/floor/items/pickup", async (req, res) => {
+    const ctx = staff(req);
+    requirePermission(ctx, "floor.serve");
+    const { kitchenItemIds } = parse(FloorItemsBody, req.body);
+    const result = await withTenantTransaction(deps.db, ctx, async (tx) => {
+      await requireFeature(tx, ctx.locationId, "kitchen_workflow");
+      return acknowledgePickup(tx, ctx, kitchenItemIds);
+    });
+    res.json(result);
+  });
+
+  /** Serve exactly these ready items (all-or-nothing), across the table's tickets. */
+  r.post("/floor/items/serve", async (req, res) => {
+    const ctx = staff(req);
+    requirePermission(ctx, "floor.serve");
+    const { kitchenItemIds } = parse(FloorItemsBody, req.body);
+    const tickets = await withTenantTransaction(deps.db, ctx, async (tx) => {
+      await requireFeature(tx, ctx.locationId, "kitchen_workflow");
+      return serveFloorItems(tx, ctx, kitchenItemIds);
+    });
+    res.json({ tickets });
   });
 
   r.post("/floor/items/:id/serve", async (req, res) => {

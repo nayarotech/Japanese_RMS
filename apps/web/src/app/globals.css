@@ -7,8 +7,9 @@
  */
 @theme {
   --color-brand: #db020e;
-  --color-brand-tint: #fbe7e8;
-  --color-brand-dark: #b0010b;
+  /* Derived from the (runtime) brand color so every partner brand gets a matching tint and dark shade. */
+  --color-brand-tint: color-mix(in srgb, var(--color-brand) 10%, white);
+  --color-brand-dark: color-mix(in srgb, var(--color-brand) 80%, black);
   --color-ink: #181d20;
   --color-ink-2: #3e454b;
   --color-muted: #5d646a;
@@ -59,4 +60,56 @@ body {
 :focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
+}
+
+/*
+ * Customer-page motion. Short, transform/opacity only, and switched off for reduced-motion users.
+ * No colors are defined here: every surface uses the theme tokens above.
+ */
+@keyframes rp-sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+@keyframes rp-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes rp-pop {
+  40% {
+    transform: scale(1.18);
+  }
+}
+@keyframes rp-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rp-sheet {
+    animation: rp-sheet-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .rp-fade {
+    animation: rp-fade 180ms ease-out;
+  }
+  .rp-pop {
+    animation: rp-pop 260ms ease-out;
+  }
+}
+/* Loading placeholder: the chip surface with a soft sheen from the panel token. */
+.rp-skeleton {
+  background: linear-gradient(
+      90deg,
+      var(--color-chip) 25%,
+      var(--color-panel) 50%,
+      var(--color-chip) 75%
+    )
+    0 0 / 200% 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rp-skeleton {
+    animation: rp-shimmer 1.4s linear infinite;
+  }
 }

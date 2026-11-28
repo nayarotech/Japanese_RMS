@@ -15,6 +15,7 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Banner, Button, ConfirmButton, Spinner } from "../../components/ui";
 import { staffApi } from "../../lib/api";
 import { formatYen } from "../../lib/format";
+import { DeliveryAreaMap } from "./DeliveryAreaMap";
 import { onlineErrorKey } from "./shared";
 
 const WEEK = [1, 2, 3, 4, 5, 6, 0]; // Monday first
@@ -277,8 +278,17 @@ export function SettingsForm() {
       </Card>
 
       <Card title={t("online.deliveryArea")} hint={t("online.deliveryAreaHint")}>
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-[220px_1fr]">
-          <RadiusPicture tiers={tiers} />
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="space-y-2">
+            <DeliveryAreaMap
+              location={s.storeLocation}
+              tiers={tiers}
+              onChange={(storeLocation) => set({ storeLocation })}
+              label={t("online.mapLabel")}
+              className="h-[320px] lg:h-[420px]"
+            />
+            <p className="text-[13px] text-muted">{t("online.mapHint")}</p>
+          </div>
           <div className="space-y-3">
             <fieldset className="grid grid-cols-2 gap-3">
               <legend className="mb-1 text-[14px] font-semibold">
@@ -496,30 +506,5 @@ function TimeInput({ value, onChange }: { value: string; onChange: (v: string) =
       onChange={(e) => onChange(e.target.value)}
       className={`h-10 w-[72px] rounded-[8px] border px-2 text-center tabular-nums ${ok ? "border-line" : "border-brand bg-brand-tint"}`}
     />
-  );
-}
-
-/** Concentric radius rings like the Figma delivery-area card (illustrative, not a map). */
-function RadiusPicture({ tiers }: { tiers: FeeTierDto[] }) {
-  const max = tiers.reduce((m, x) => Math.max(m, x.maxDistanceM), 0) || 1;
-  return (
-    <div
-      className="relative flex aspect-square items-center justify-center rounded-[12px] bg-chip"
-      aria-hidden
-    >
-      {[...tiers]
-        .sort((a, b) => b.maxDistanceM - a.maxDistanceM)
-        .map((t, i) => (
-          <span
-            key={t.maxDistanceM}
-            className={`absolute rounded-full border-2 ${i === 0 ? "border-brand bg-brand-tint" : "border-dashed border-brand-dark"}`}
-            style={{
-              width: `${String((t.maxDistanceM / max) * 80)}%`,
-              height: `${String((t.maxDistanceM / max) * 80)}%`,
-            }}
-          />
-        ))}
-      <span className="relative size-3 rounded-full bg-ink ring-4 ring-white" />
-    </div>
   );
 }

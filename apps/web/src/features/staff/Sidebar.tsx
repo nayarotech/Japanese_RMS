@@ -26,6 +26,12 @@ const ITEMS: readonly {
     feature: "online_ordering",
   },
   { href: "/admin/menu", icon: "menu", label: "menu", permission: "menu.manage" },
+  {
+    href: "/admin/storefront",
+    icon: "settings",
+    label: "storefront",
+    permission: "storefront.manage",
+  },
   { href: "/admin/tables", icon: "table-qr", label: "tableQr", permission: "tables.manage" },
 ];
 

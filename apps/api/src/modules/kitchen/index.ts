@@ -15,7 +15,7 @@ import { appendOutbox } from "../../infrastructure/events/outbox.js";
 import { Errors } from "../../shared/errors/app-error.js";
 import type { StaffContext } from "../../shared/types/access-context.js";
 import { recordAudit } from "../audit/index.js";
-import { getSession } from "../tables/index.js";
+import { getSession, listActiveSessions } from "../tables/index.js";
 import {
   type KitchenAction,
   assertTransition,
@@ -73,7 +73,12 @@ export interface KitchenTicketView {
   items: KitchenItemView[];
 }
 
-/** Called by orders inside the order transaction: one ticket per order submission. */
+/**
+ * Called by orders inside the order transaction: one ticket per order submission.
+ * The kitchen starts as soon as the restaurant receives the order: tickets and items are created directly in
+ * `preparing` (there is no separate "new"/"start" step on the kitchen screen). Items are therefore no longer editable
+ * by floor staff once sent; voiding them needs `orders.void_prepared` (managers) and a reason.
+ */
 export async function createTicket(
   tx: Tx,
   args: {
@@ -99,9 +104,11 @@ export async function createTicket(
       table_name: args.tableName,
       due_at: args.dueAt ?? null,
       source: args.source,
+      status: "preparing",
     })
     .returning("id")
     .executeTakeFirstOrThrow();
+  const startedAt = new Date();
   await tx
     .insertInto("kitchen_ticket_items")
     .values(
@@ -114,6 +121,8 @@ export async function createTicket(
         name_en: i.nameEn,
         quantity: i.quantity,
         note: i.note,
+        status: "preparing" as const,
+        started_at: startedAt,
       })),
     )
     .execute();
@@ -256,6 +265,21 @@ export async function applyKitchenAction(
     itemIds = rows.map((r) => r.id);
   }
 
+  return commitAction(tx, ctx, action, ticketId, itemIds, now);
+}
+
+/**
+ * Applies an already-validated transition to locked items of ONE ticket, refreshes the derived ticket status and
+ * writes the outbox events and audit entry. Every kitchen/floor action goes through here.
+ */
+async function commitAction(
+  tx: Tx,
+  ctx: StaffContext,
+  action: KitchenAction,
+  ticketId: string,
+  itemIds: string[],
+  now: Date,
+): Promise<KitchenTicketView> {
   const to = transitionFor(action).to;
   await tx
     .updateTable("kitchen_ticket_items")
@@ -319,18 +343,277 @@ export async function applyKitchenAction(
   return ticket;
 }
 
-/** Online tickets are handed over by the online-orders workflow (pickup/dispatch), not served at a table. */
+/**
+ * Floor serving rules for a ticket: online tickets are handed over by the online-orders workflow (pickup/dispatch),
+ * and food of a dining session that has been closed (settled) is no longer a service task.
+ */
 async function assertServableAtTable(tx: Tx, ticketId: string): Promise<void> {
   const t = await tx
-    .selectFrom("kitchen_tickets")
-    .select("source")
-    .where("id", "=", ticketId)
+    .selectFrom("kitchen_tickets as t")
+    .leftJoin("table_sessions as s", "s.id", "t.table_session_id")
+    .select(["t.source", "s.status as session_status"])
+    .where("t.id", "=", ticketId)
     .executeTakeFirst();
   if (t && isOnlineSource(t.source))
     throw Errors.conflict(
       "online_handover_required",
       "Online orders are handed over from the Online orders screen",
     );
+  if (t?.session_status === "closed")
+    throw Errors.conflict("session_closed", "This table's dining session is already closed");
+}
+
+// ---------------------------------------------------------------- floor (waiter) actions
+
+const MAX_FLOOR_BATCH = 50;
+
+/** Locks the given items of THIS location in id order (the same lock order as every other kitchen action). */
+async function lockFloorItems(tx: Tx, ctx: StaffContext, itemIds: readonly string[]) {
+  const ids = [...new Set(itemIds)];
+  if (ids.length === 0 || ids.length > MAX_FLOOR_BATCH)
+    throw Errors.validation({ kitchenItemIds: `1 to ${String(MAX_FLOOR_BATCH)} items` });
+  const rows = await tx
+    .selectFrom("kitchen_ticket_items")
+    .select(["id", "ticket_id", "status", "picked_up_by"])
+    .where("id", "in", ids)
+    .where("location_id", "=", ctx.locationId)
+    .orderBy("id")
+    .forUpdate()
+    .execute();
+  // Unknown ids, or ids of another branch/tenant (RLS + location filter), are indistinguishable: not found.
+  if (rows.length !== ids.length) throw Errors.notFound("kitchen item");
+  for (const ticketId of new Set(rows.map((r) => r.ticket_id)))
+    await assertServableAtTable(tx, ticketId);
+  return rows;
+}
+
+function byTicket(rows: readonly { id: string; ticket_id: string }[]) {
+  const groups = new Map<string, string[]>();
+  for (const r of rows) groups.set(r.ticket_id, [...(groups.get(r.ticket_id) ?? []), r.id]);
+  return groups;
+}
+
+/**
+ * Marks specific ready items served, across one or more tickets (e.g. several orders of the same table).
+ * All-or-nothing: if any item is not `ready` (already served by someone else, still preparing, voided) the whole
+ * request is rejected with 409 and nothing changes, so a waiter never serves food they did not mean to.
+ */
+export async function serveFloorItems(
+  tx: Tx,
+  ctx: StaffContext,
+  itemIds: readonly string[],
+): Promise<KitchenTicketView[]> {
+  const rows = await lockFloorItems(tx, ctx, itemIds);
+  for (const r of rows) assertTransition(r.status, "serve");
+  const now = new Date();
+  const tickets: KitchenTicketView[] = [];
+  for (const [ticketId, ids] of byTicket(rows))
+    tickets.push(await commitAction(tx, ctx, "serve", ticketId, ids, now));
+  return tickets;
+}
+
+/**
+ * Pickup acknowledgement ("I have taken this from the pass"). Only for `ready` items; the item stays `ready` until it
+ * is served. Repeating it for items you already picked up is a no-op; items another waiter picked up are rejected
+ * (409 already_picked_up), so two waiters never carry the same food.
+ */
+export async function acknowledgePickup(
+  tx: Tx,
+  ctx: StaffContext,
+  itemIds: readonly string[],
+): Promise<{ pickedUp: string[] }> {
+  const rows = await lockFloorItems(tx, ctx, itemIds);
+  for (const r of rows) {
+    if (r.status !== "ready")
+      throw Errors.conflict(
+        "invalid_kitchen_transition",
+        `Cannot pick up an item that is ${r.status}`,
+        {
+          current: r.status,
+          action: "pickup",
+        },
+      );
+    if (r.picked_up_by !== null && r.picked_up_by !== ctx.userId)
+      throw Errors.conflict("already_picked_up", "Another staff member has already picked this up");
+  }
+  const todo = rows.filter((r) => r.picked_up_by === null);
+  if (todo.length === 0) return { pickedUp: [] };
+  const now = new Date();
+  await tx
+    .updateTable("kitchen_ticket_items")
+    .set((eb) => ({ picked_up_at: now, picked_up_by: ctx.userId, version: eb("version", "+", 1) }))
+    .where(
+      "id",
+      "in",
+      todo.map((r) => r.id),
+    )
+    .execute();
+  for (const [ticketId, ids] of byTicket(todo)) {
+    const t = await tx
+      .selectFrom("kitchen_tickets")
+      .select("table_session_id")
+      .where("id", "=", ticketId)
+      .executeTakeFirstOrThrow();
+    if (t.table_session_id === null) continue; // unreachable: online tickets are rejected above
+    await appendOutbox(tx, ctx.tenantId, ctx.locationId, {
+      type: "waiter.food.picked_up",
+      payload: { ticketId, tableSessionId: t.table_session_id, kitchenItemIds: ids },
+    });
+    await recordAudit(tx, ctx, {
+      action: "kitchen.items_picked_up",
+      targetType: "kitchen_ticket",
+      targetId: ticketId,
+      metadata: { itemIds: ids },
+    });
+  }
+  return { pickedUp: todo.map((r) => r.id) };
+}
+
+export interface FloorItemView {
+  kitchenItemId: string;
+  ticketId: string;
+  orderNo: number;
+  tableSessionId: string;
+  tableName: string;
+  nameJa: string;
+  nameEn: string | null;
+  quantity: number;
+  note: string | null;
+  status: "queued" | "preparing" | "ready";
+  orderedAt: Date;
+  startedAt: Date | null;
+  readyAt: Date | null;
+  pickedUp: { at: Date; byUserId: string; byName: string } | null;
+}
+
+export interface FloorTableView {
+  tableSessionId: string;
+  tableId: string;
+  tableName: string;
+  status: "open" | "bill_requested";
+  guestCount: number;
+  openedAt: Date;
+  assignedWaiterId: string | null;
+  readyCount: number;
+  preparingCount: number;
+  servedCount: number;
+}
+
+/**
+ * Everything a waiter needs, straight from PostgreSQL: ready food (to pick up and serve), food still in preparation,
+ * and the service state of every occupied table. Only dine-in tickets of OPEN (not closed) sessions of this location.
+ * Counts are portions (quantities), the way waiters carry plates. No money, no customer data.
+ */
+export async function getFloorBoard(tx: Tx, locationId: string) {
+  const [rows, sessions] = await Promise.all([
+    tx
+      .selectFrom("kitchen_ticket_items as i")
+      .innerJoin("kitchen_tickets as t", "t.id", "i.ticket_id")
+      .innerJoin("table_sessions as s", "s.id", "t.table_session_id")
+      .leftJoin("users as u", "u.id", "i.picked_up_by")
+      .select([
+        "i.id",
+        "i.ticket_id",
+        "t.order_no",
+        "t.table_session_id",
+        "t.table_name",
+        "t.created_at",
+        "i.name_ja",
+        "i.name_en",
+        "i.quantity",
+        "i.note",
+        "i.status",
+        "i.started_at",
+        "i.ready_at",
+        "i.picked_up_at",
+        "i.picked_up_by",
+        "u.display_name as picked_up_name",
+      ])
+      .where("i.location_id", "=", locationId)
+      .where("i.status", "in", ["queued", "preparing", "ready"])
+      .where("s.status", "<>", "closed")
+      .orderBy("i.ready_at")
+      .orderBy("t.created_at")
+      .orderBy("i.id")
+      .execute(),
+    listActiveSessions(tx, locationId),
+  ]);
+  const served =
+    sessions.length === 0
+      ? []
+      : await tx
+          .selectFrom("kitchen_ticket_items as i")
+          .innerJoin("kitchen_tickets as t", "t.id", "i.ticket_id")
+          .select(["t.table_session_id", (eb) => eb.fn.sum<string>("i.quantity").as("n")])
+          .where(
+            "t.table_session_id",
+            "in",
+            sessions.map((x) => x.id),
+          )
+          .where("i.status", "=", "served")
+          .groupBy("t.table_session_id")
+          .execute();
+
+  const items: FloorItemView[] = rows.flatMap((r) =>
+    r.table_session_id === null ||
+    r.table_name === null ||
+    r.status === "served" ||
+    r.status === "voided"
+      ? []
+      : [
+          {
+            kitchenItemId: r.id,
+            ticketId: r.ticket_id,
+            orderNo: r.order_no,
+            tableSessionId: r.table_session_id,
+            tableName: r.table_name,
+            nameJa: r.name_ja,
+            nameEn: r.name_en,
+            quantity: r.quantity,
+            note: r.note,
+            status: r.status,
+            orderedAt: r.created_at,
+            startedAt: r.started_at,
+            readyAt: r.ready_at,
+            pickedUp:
+              r.picked_up_at && r.picked_up_by
+                ? { at: r.picked_up_at, byUserId: r.picked_up_by, byName: r.picked_up_name ?? "" }
+                : null,
+          },
+        ],
+  );
+  const ready = items.filter((i) => i.status === "ready");
+  const preparing = items.filter((i) => i.status !== "ready");
+  const sum = (list: FloorItemView[], sessionId: string) =>
+    list.reduce((n, i) => (i.tableSessionId === sessionId ? n + i.quantity : n), 0);
+  const servedBy = new Map(served.map((r) => [r.table_session_id, Number(r.n)]));
+
+  const tables: FloorTableView[] = sessions
+    .map((x) => ({
+      tableSessionId: x.id,
+      tableId: x.tableId,
+      tableName: x.tableName,
+      status: x.status === "bill_requested" ? ("bill_requested" as const) : ("open" as const),
+      guestCount: x.guestCount,
+      openedAt: x.openedAt,
+      assignedWaiterId: x.assignedWaiterId,
+      readyCount: sum(ready, x.id),
+      preparingCount: sum(preparing, x.id),
+      servedCount: servedBy.get(x.id) ?? 0,
+    }))
+    .sort((a, b) => a.tableName.localeCompare(b.tableName, "ja", { numeric: true }));
+
+  return {
+    serverTime: new Date(),
+    counts: {
+      ready: ready.reduce((n, i) => n + i.quantity, 0),
+      preparing: preparing.reduce((n, i) => n + i.quantity, 0),
+      activeTables: tables.length,
+    },
+    ready,
+    preparing,
+    tables,
+  };
 }
 
 /**
@@ -465,12 +748,17 @@ export async function listReadyItems(tx: Tx, locationId: string) {
       "i.quantity",
       "i.note",
       "i.ready_at",
+      "i.picked_up_at",
+      "i.picked_up_by",
+      "t.order_no",
       "t.table_session_id",
       "t.table_name",
     ])
+    // Inner join: online orders (no table session) are not served by the floor; closed sessions are settled.
+    .innerJoin("table_sessions as s", "s.id", "t.table_session_id")
+    .where("s.status", "<>", "closed")
     .where("i.location_id", "=", locationId)
     .where("i.status", "=", "ready")
-    .where("t.table_session_id", "is not", null) // online orders are not served by the floor
     .orderBy("i.ready_at")
     .execute();
   return rows.flatMap((r) => {
@@ -486,6 +774,9 @@ export async function listReadyItems(tx: Tx, locationId: string) {
         quantity: r.quantity,
         note: r.note,
         readyAt: r.ready_at,
+        orderNo: r.order_no,
+        pickedUpAt: r.picked_up_at,
+        pickedUpBy: r.picked_up_by,
       },
     ];
   });

@@ -385,6 +385,8 @@ export default function PosPage() {
                       </span>
                       {i.status === "active" &&
                         can("orders.edit") &&
+                        // Sent dishes are cooking at once: only managers (orders.void_prepared) may void them.
+                        (i.kitchenStatus === "queued" || can("orders.void_prepared")) &&
                         session.status !== "closed" && (
                           <button
                             type="button"

@@ -4,6 +4,9 @@
  *   queued --start--> preparing --ready--> ready --serve--> served
  *      \_______________ void (orders module) ____________/--> voided
  *
+ * New tickets are created directly in `preparing` (the kitchen starts on receipt). `queued` and `start` remain only
+ * for rows created before that change (migration 2026112901 moved open ones to `preparing`).
+ *
  * Preparation (kitchen staff) and serving (floor staff) are separate transitions with separate permissions.
  */
 export type KitchenItemStatus = "queued" | "preparing" | "ready" | "served" | "voided";

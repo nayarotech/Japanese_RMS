@@ -277,6 +277,33 @@ export interface MenuItemImagesTable {
   deleted_at: NullableTimestamp;
   cleanup_attempts: Generated<number>;
 }
+export interface StorefrontProfilesTable {
+  location_id: string;
+  tenant_id: string;
+  display_name: string | null;
+  description_ja: string | null;
+  description_en: string | null;
+  announcement_ja: string | null;
+  announcement_en: string | null;
+  phone: string | null;
+  address_ja: string | null;
+  address_en: string | null;
+  accent_color: string | null;
+  version: Generated<number>;
+  updated_by: string | null;
+  updated_at: Generated<Date>;
+}
+export interface StorefrontFeaturedItemsTable {
+  tenant_id: string;
+  location_id: string;
+  menu_item_id: string;
+  sort_order: number;
+  created_at: Generated<Date>;
+}
+export type StorefrontImageKind = "logo" | "cover";
+export interface StorefrontImagesTable extends Omit<MenuItemImagesTable, "menu_item_id"> {
+  kind: StorefrontImageKind;
+}
 export interface OrdersTable {
   id: Generated<string>;
   tenant_id: string;
@@ -338,6 +365,8 @@ export interface KitchenTicketItemsTable {
   ready_at: NullableTimestamp;
   served_at: NullableTimestamp;
   served_by: string | null;
+  picked_up_at: NullableTimestamp;
+  picked_up_by: Generated<string | null>;
   version: Generated<number>;
 }
 export interface PaymentsTable {
@@ -517,6 +546,9 @@ export interface Database {
   menu_items: MenuItemsTable;
   menu_item_translations: MenuItemTranslationsTable;
   menu_item_images: MenuItemImagesTable;
+  storefront_profiles: StorefrontProfilesTable;
+  storefront_featured_items: StorefrontFeaturedItemsTable;
+  storefront_images: StorefrontImagesTable;
   orders: OrdersTable;
   order_items: OrderItemsTable;
   kitchen_tickets: KitchenTicketsTable;

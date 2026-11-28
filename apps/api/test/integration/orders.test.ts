@@ -9,16 +9,14 @@ let h: Harness;
 let f: TenantFixture;
 let cashier: StaffClient;
 let waiter: StaffClient;
-let kitchen: StaffClient;
 let manager: StaffClient;
 
 beforeAll(async () => {
   h = await createHarness();
   f = await h.fixture();
-  [cashier, waiter, kitchen, manager] = await Promise.all([
+  [cashier, waiter, manager] = await Promise.all([
     loginStaff(h.app, f.users.cashier.email, TEST_PASSWORD),
     loginStaff(h.app, f.users.waiter.email, TEST_PASSWORD),
-    loginStaff(h.app, f.users.kitchen.email, TEST_PASSWORD),
     loginStaff(h.app, f.users.manager.email, TEST_PASSWORD),
   ]);
 });
@@ -126,7 +124,7 @@ describe("server-authoritative prices and validation", () => {
 });
 
 describe("editing and voiding", () => {
-  it("allows edits before preparation only; voids after preparation need a manager and a reason", async () => {
+  it("sent items are in preparation at once: floor staff cannot edit or void them; a manager voids with a reason", async () => {
     const s = await openTable(5);
     const order = await waiter.post(
       `/sessions/${s.id}/orders`,
@@ -144,20 +142,14 @@ describe("editing and voiding", () => {
       kitchenItemId: string;
     }[];
 
+    // The kitchen started both items on receipt: waiters can no longer edit or void them.
     const edit = await waiter.patch(`/order-items/${first!.id}`, {
       version: first!.version,
       quantity: 2,
       note: "Less spicy",
     });
-    expect(edit.status).toBe(204);
-    const stale = await waiter.patch(`/order-items/${first!.id}`, {
-      version: first!.version,
-      quantity: 3,
-    });
-    expect(stale.body.error.code).toBe("version_conflict");
-
-    // Kitchen starts the second item: waiter can no longer edit or void it.
-    await kitchen.post(`/kitchen/items/${second!.kitchenItemId}/start`);
+    expect(edit.status).toBe(409);
+    expect(edit.body.error.code).toBe("item_in_preparation");
     const lateEdit = await waiter.patch(`/order-items/${second!.id}`, {
       version: second!.version,
       quantity: 2,
@@ -176,7 +168,7 @@ describe("editing and voiding", () => {
 
     const bill = (await cashier.get(`/sessions/${s.id}/bill`)).body;
     expect(bill.lines).toHaveLength(1);
-    expect(bill.totalYen).toBe(menu(1).priceYen * 2);
+    expect(bill.totalYen).toBe(menu(1).priceYen);
 
     const audit = await h.asTenant(f.tenantId, (tx) =>
       tx

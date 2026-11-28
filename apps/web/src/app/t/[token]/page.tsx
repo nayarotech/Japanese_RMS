@@ -1,41 +1,54 @@
 "use client";
 /**
- * Customer QR menu (Figma "Guest QR menu (phone)"). No account. Viewing the menu needs only the printed
- * QR; ordering needs the table code that staff give to the seated party (see docs/security/qr-ordering.md).
- * Every price shown is a preview; the server recalculates totals from its own menu.
+ * Dine-in table QR experience. Scanning the table's QR joins THAT table's current dining session (server-issued,
+ * HttpOnly guest credential; ADR-0008). The guest can browse, add dishes with per-dish requests, send orders, follow
+ * each dish's kitchen status and see the running bill of their own table only. Payment happens at the register.
+ * Every price shown is a preview; the server prices orders from its own menu.
  */
-import type { GuestSessionResponse, PublicTableResponse } from "@restaurant-platform/contracts";
+import type {
+  GuestSessionResponse,
+  KitchenItemStatus,
+  PublicTableResponse,
+} from "@restaurant-platform/contracts";
 import { useLocale, useTranslations } from "next-intl";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MenuItemImage } from "../../../components/MenuItemImage";
-import { LangToggle } from "../../../components/LangToggle";
-import { Banner, Spinner, Stepper } from "../../../components/ui";
+import { Banner } from "../../../components/ui";
+import { CartBar, CartPanel } from "../../../features/customer/CartPanel";
+import { CustomerHeader, accentStyle } from "../../../features/customer/CustomerHeader";
+import { ItemSheet } from "../../../features/customer/ItemSheet";
+import { MenuBrowser } from "../../../features/customer/MenuBrowser";
+import { Sheet } from "../../../features/customer/Sheet";
+import { useCart } from "../../../features/customer/cart";
+import type { CustomerMenuItem } from "../../../features/customer/types";
+import {
+  CartButton,
+  EmptyState,
+  Icon,
+  PageSkeleton,
+  Spinner,
+  StatusPill,
+  primaryButton,
+} from "../../../features/customer/ui";
 import { ApiError, errorKey, guestApi, newIdempotencyKey } from "../../../lib/api";
-import { formatYen, pickName, pickSnapshotName } from "../../../lib/format";
+import { formatYen, pickSnapshotName, ratePercent } from "../../../lib/format";
 import { useRealtime } from "../../../lib/realtime";
 
-type MenuItem = PublicTableResponse["menu"][number]["items"][number];
-interface CartLine {
-  key: string;
-  item: MenuItem;
-  quantity: number;
-  note: string;
-}
+type Message = { tone: "error" | "ok" | "info"; text: string };
+const STAGES: KitchenItemStatus[] = ["queued", "preparing", "ready", "served"];
 
-export default function GuestMenuPage() {
+export default function TableOrderingPage() {
   const { token } = useParams<{ token: string }>();
   const t = useTranslations();
+  const tc = useTranslations("customer");
   const locale = useLocale();
   const [table, setTable] = useState<PublicTableResponse | null>(null);
   const [session, setSession] = useState<GuestSessionResponse | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [category, setCategory] = useState<string | null>(null);
-  const [cart, setCart] = useState<CartLine[]>([]);
-  const [view, setView] = useState<"menu" | "cart" | "orders">("menu");
-  const [message, setMessage] = useState<{ tone: "error" | "ok" | "info"; text: string } | null>(
-    null,
-  );
+  const [view, setView] = useState<"menu" | "table">("menu");
+  const [openItem, setOpenItem] = useState<CustomerMenuItem | null>(null);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [message, setMessage] = useState<Message | null>(null);
   const [busy, setBusy] = useState(false);
   const orderKey = useRef(newIdempotencyKey());
   // Remembers that this phone was part of the dining session, so a closed session reads "settled", not "not seated".
@@ -44,10 +57,7 @@ export default function GuestMenuPage() {
   const loadTable = useCallback(() => {
     guestApi
       .get<PublicTableResponse>(`/public/tables/${token}`)
-      .then((r) => {
-        setTable(r);
-        setCategory((c) => c ?? r.menu[0]?.id ?? null);
-      })
+      .then(setTable)
       .catch((err: unknown) => {
         if (err instanceof ApiError && (err.status === 404 || err.status === 400))
           setNotFound(true);
@@ -62,15 +72,14 @@ export default function GuestMenuPage() {
         guestApi.setCsrf(s.csrfToken);
         setSession(s);
       })
-      .catch(() => {
-        setSession(null);
-      });
+      .catch(() => setSession(null));
   }, []);
 
   useEffect(() => {
     loadTable();
     loadSession();
   }, [loadTable, loadSession]);
+  // Socket hints (this table's guest room only) trigger a refetch; reconnects reconcile; polling is the fallback.
   useRealtime(
     [
       "order.created",
@@ -92,48 +101,24 @@ export default function GuestMenuPage() {
     if (joined) setWasJoined(true);
   }, [joined]);
   const settled = wasJoined && !joined && table?.sessionState !== "open";
+  const canOrder = joined && table.orderingEnabled && session.sessionStatus === "open";
+
+  const menuMap = useMemo(
+    () =>
+      table ? new Map(table.menu.flatMap((c) => c.items.map((i) => [i.id, i] as const))) : null,
+    [table],
+  );
+  const cart = useCart(`rp_qr_cart:${token}`, menuMap, "session");
+  const { clear: clearCart } = cart;
   useEffect(() => {
     if (settled) {
-      setMessage(null);
-      setCart([]);
+      clearCart();
+      setCartOpen(false);
       setView("menu");
     }
-  }, [settled]);
-  const canOrder = joined && table.orderingEnabled && session.sessionStatus === "open";
-  const items = useMemo(
-    () => table?.menu.find((c) => c.id === category)?.items ?? [],
-    [table, category],
-  );
-  const count = cart.reduce((s, l) => s + l.quantity, 0);
-  const total = cart.reduce((s, l) => s + l.item.priceYen * l.quantity, 0);
+  }, [settled, clearCart]);
 
-  const add = (item: MenuItem) => {
-    if (!item.isAvailable) return;
-    setCart((c) => {
-      const plain = c.find((l) => l.item.id === item.id && l.note === "");
-      if (plain)
-        return c.map((l) => (l === plain ? { ...l, quantity: Math.min(99, l.quantity + 1) } : l));
-      return [...c, { key: crypto.randomUUID(), item, quantity: 1, note: "" }];
-    });
-  };
-  const update = (key: string, patch: Partial<CartLine>) =>
-    setCart((c) =>
-      c.map((l) => (l.key === key ? { ...l, ...patch } : l)).filter((l) => l.quantity > 0),
-    );
-  /** Duplicate a line so the same dish can carry a different request (e.g. one less spicy, one extra noodles). */
-  const split = (key: string) =>
-    setCart((c) =>
-      c.flatMap((l) =>
-        l.key === key && l.quantity > 1
-          ? [
-              { ...l, quantity: l.quantity - 1 },
-              { key: crypto.randomUUID(), item: l.item, quantity: 1, note: "" },
-            ]
-          : [l],
-      ),
-    );
-
-  // Scan-to-order: opening the QR of a seated table joins its dining session automatically (no code).
+  // Scan-to-order: opening the QR of a table joins its dining session automatically (no code).
   const joining = useRef(false);
   const join = useCallback(async () => {
     if (joining.current) return;
@@ -166,29 +151,26 @@ export default function GuestMenuPage() {
   }, [table, join, wasJoined]);
 
   async function placeOrder() {
-    if (!canOrder || cart.length === 0) return;
+    if (!canOrder || cart.orderLines.length === 0 || cart.problems.length > 0) return;
     setBusy(true);
     setMessage(null);
     try {
-      await guestApi.send(
+      const placed = await guestApi.send<{ orderNo: number }>(
         "POST",
         "/public/session/orders",
-        {
-          items: cart.map((l) => ({
-            menuItemId: l.item.id,
-            quantity: l.quantity,
-            note: l.note.trim() || null,
-          })),
-        },
+        { items: cart.orderLines },
         { idempotencyKey: orderKey.current },
       );
       orderKey.current = newIdempotencyKey();
-      setCart([]);
-      setView("orders");
-      setMessage({ tone: "ok", text: t("guest.orderPlaced") });
+      cart.clear();
+      setCartOpen(false);
+      setView("table");
+      setMessage({ tone: "ok", text: tc("dineIn.orderSent", { no: placed.orderNo }) });
+      window.scrollTo({ top: 0 });
       loadSession();
     } catch (err) {
       const code = err instanceof ApiError ? err.code : "";
+      // The same idempotency key is kept for a retry, so a lost response can never create a second order.
       setMessage({
         tone: "error",
         text:
@@ -196,7 +178,11 @@ export default function GuestMenuPage() {
             ? t("guest.billRequested")
             : code === "session_closed" || code === "unauthenticated"
               ? t("guest.sessionClosed")
-              : t(errorKey(err)),
+              : code === "item_unavailable" || code === "item_not_found"
+                ? tc("itemsChangedRetry")
+                : err instanceof ApiError && err.status === 0
+                  ? tc("retrySafe")
+                  : t(errorKey(err)),
       });
       loadTable();
       loadSession();
@@ -207,213 +193,334 @@ export default function GuestMenuPage() {
 
   if (notFound)
     return (
-      <main className="p-6">
-        <Banner>{t("guest.notFound")}</Banner>
+      <main className="flex min-h-dvh items-center justify-center bg-white">
+        <EmptyState icon={<Icon.Bag className="size-6" />} title={t("guest.notFound")} />
       </main>
     );
-  if (!table) return <Spinner label={t("common.loading")} />;
+  if (!table) return <PageSkeleton variant="table" label={t("common.loading")} />;
+
+  const name = table.profile.displayName ?? table.location.name;
+  const announcement =
+    locale === "en"
+      ? (table.profile.announcement.en ?? table.profile.announcement.ja)
+      : table.profile.announcement.ja;
+  const orders = session?.orders.filter((o) => o.items.length > 0) ?? [];
+  const orderHint = !table.orderingEnabled
+    ? t("guest.orderingDisabled")
+    : settled
+      ? t("guest.sessionClosed")
+      : session?.sessionStatus === "bill_requested" || table.sessionState === "bill_requested"
+        ? t("guest.billRequested")
+        : tc("dineIn.notJoined");
+
+  const placeButton = (
+    <button
+      type="button"
+      disabled={busy || !canOrder || cart.orderLines.length === 0 || cart.problems.length > 0}
+      onClick={() => void placeOrder()}
+      className={primaryButton}
+    >
+      {busy && <Spinner light />}
+      {busy ? t("guest.placing") : tc("dineIn.sendToKitchen")}
+    </button>
+  );
+  const cartPanel = (
+    <CartPanel
+      cart={cart}
+      totalLabel={t("guest.total")}
+      footnote={tc("dineIn.payAtRegister")}
+      action={placeButton}
+    />
+  );
 
   return (
-    <div className="mx-auto flex min-h-dvh max-w-[480px] flex-col bg-white">
-      <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-line-2 bg-white px-4 py-3.5">
-        <div className="min-w-0">
-          <h1 className="truncate text-[18px] font-bold">{table.location.name}</h1>
-          <span className="mt-0.5 inline-block rounded-full bg-ink px-2.5 py-0.5 text-[12px] font-semibold text-white">
-            {t("guest.table", { name: table.table.name })}
-          </span>
-        </div>
-        <div className="ml-auto">
-          <LangToggle />
-        </div>
-      </header>
-
-      <main className="flex-1 pb-28">
-        {message && (
-          <div className="px-4 pt-3">
-            <Banner tone={message.tone}>{message.text}</Banner>
-          </div>
-        )}
-        {!table.orderingEnabled && (
-          <div className="px-4 pt-3">
-            <Banner tone="info">{t("guest.orderingDisabled")}</Banner>
-          </div>
-        )}
-        {settled && (
-          <div className="px-4 pt-3">
-            <Banner tone="ok">{t("guest.sessionClosed")}</Banner>
-          </div>
-        )}
-        {joined && session.sessionStatus === "bill_requested" && (
-          <div className="px-4 pt-3">
-            <Banner tone="info">{t("guest.billRequested")}</Banner>
-          </div>
-        )}
-
-        {view === "menu" && (
+    <div style={accentStyle(table.profile.accentColor)} className="min-h-dvh bg-white lg:bg-canvas">
+      <CustomerHeader
+        logo={table.profile.logo}
+        name={name}
+        subtitle={
           <>
-            <nav className="flex gap-2 overflow-x-auto px-4 py-3" aria-label="categories">
-              {table.menu.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  aria-pressed={c.id === category}
-                  onClick={() => setCategory(c.id)}
-                  className={`h-11 shrink-0 rounded-full border px-4 text-[14px] font-semibold ${c.id === category ? "border-brand bg-brand text-white" : "border-line text-ink-2"}`}
-                >
-                  {pickName(c.name, locale)}
-                </button>
-              ))}
-              {joined && (
-                <button
-                  type="button"
-                  onClick={() => setView("orders")}
-                  className="h-11 shrink-0 rounded-full border border-ink px-4 text-[14px] font-semibold text-ink"
-                >
-                  {t("guest.myOrders")}
-                </button>
-              )}
-            </nav>
-            <ul className="px-4">
-              {items.map((i) => (
-                <li key={i.id} className="flex items-center gap-3 border-b border-line-soft py-3">
-                  <MenuItemImage
-                    image={i.image}
-                    name={pickName(i.name, locale)}
-                    className="size-[72px] rounded-[12px]"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[16px] font-semibold">{pickName(i.name, locale)}</p>
-                    {(locale === "en" ? i.description.en : i.description.ja) && (
-                      <p className="text-[13px] text-muted">
-                        {locale === "en" ? i.description.en : i.description.ja}
-                      </p>
-                    )}
-                    <p className="text-[16px] font-bold">
-                      {i.isAvailable ? formatYen(i.priceYen, locale) : t("guest.soldOut")}
-                    </p>
-                  </div>
-                  {canOrder && (
-                    <button
-                      type="button"
-                      disabled={!i.isAvailable}
-                      onClick={() => add(i)}
-                      aria-label={t("guest.add", { name: pickName(i.name, locale) })}
-                      className="flex size-11 shrink-0 items-center justify-center rounded-full bg-brand text-[22px] text-white disabled:opacity-40"
-                    >
-                      +
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <span className="inline-flex shrink-0 items-center rounded-full bg-ink px-2 py-px text-[11px] font-bold text-white">
+              {t("guest.table", { name: table.table.name })}
+            </span>
+            {table.profile.displayName && <span className="truncate">{table.location.name}</span>}
           </>
-        )}
+        }
+        action={
+          canOrder && view === "menu" ? (
+            <CartButton
+              count={cart.count}
+              label={tc("cartButton", { count: cart.count })}
+              onClick={() => setCartOpen(true)}
+            />
+          ) : undefined
+        }
+      />
 
-        {view === "cart" && (
-          <section className="px-4 pt-3">
-            <h2 className="mb-2 text-[18px] font-bold">{t("guest.yourOrder")}</h2>
-            {cart.length === 0 ? (
-              <p className="text-[14px] text-muted">{t("guest.empty")}</p>
-            ) : (
-              cart.map((l) => (
-                <div key={l.key} className="border-b border-line-soft py-3">
-                  <div className="flex items-center gap-2">
-                    <p className="min-w-0 flex-1 text-[15px] font-semibold">
-                      {pickName(l.item.name, locale)}
-                    </p>
-                    <Stepper
-                      value={l.quantity}
-                      onChange={(q) => update(l.key, { quantity: q })}
-                      labels={{ dec: t("common.decrease"), inc: t("common.increase") }}
-                    />
-                  </div>
-                  <input
-                    value={l.note}
-                    maxLength={140}
-                    onChange={(e) => update(l.key, { note: e.target.value })}
-                    placeholder={t("guest.notePlaceholder")}
-                    aria-label={t("guest.notePlaceholder")}
-                    className="mt-2 h-10 w-full rounded-[8px] border border-line bg-panel px-3 text-[14px]"
-                  />
-                  {l.quantity > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => split(l.key)}
-                      className="mt-1 text-[12px] font-semibold text-brand"
-                    >
-                      + {t("guest.separateRequest")}
-                    </button>
-                  )}
-                </div>
-              ))
-            )}
-            <div className="mt-4 flex items-center justify-between text-[16px] font-bold">
-              <span>{t("guest.total")}</span>
-              <span>{formatYen(total, locale)}</span>
+      <div className="mx-auto max-w-[1180px] lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-6 lg:px-6 lg:py-6">
+        <main className="min-w-0 bg-white pb-32 lg:rounded-[24px] lg:pb-10 lg:shadow-sm lg:shadow-ink/5 lg:ring-1 lg:ring-line-soft">
+          {(announcement ||
+            message ||
+            !table.orderingEnabled ||
+            settled ||
+            (joined && session.sessionStatus === "bill_requested")) && (
+            <div className="space-y-2 px-4 pt-4 sm:px-6">
+              {message && <Banner tone={message.tone}>{message.text}</Banner>}
+              {!table.orderingEnabled && <Banner tone="info">{t("guest.orderingDisabled")}</Banner>}
+              {settled && <Banner tone="ok">{t("guest.sessionClosed")}</Banner>}
+              {!settled && joined && session.sessionStatus === "bill_requested" && (
+                <Banner tone="info">{t("guest.billRequested")}</Banner>
+              )}
+              {announcement && (
+                <p className="rounded-[14px] bg-panel px-4 py-3 text-[14px] leading-relaxed text-ink-2 ring-1 ring-line-soft">
+                  {announcement}
+                </p>
+              )}
             </div>
-            <button
-              type="button"
-              disabled={busy || cart.length === 0 || !canOrder}
-              onClick={() => void placeOrder()}
-              className="mt-4 h-14 w-full rounded-[14px] bg-brand text-[16px] font-semibold text-white disabled:opacity-50"
-            >
-              {busy ? t("guest.placing") : t("guest.placeOrder")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setView("menu")}
-              className="mt-2 h-12 w-full text-[14px] font-semibold text-ink-2"
-            >
-              {t("common.back")}
-            </button>
-          </section>
-        )}
+          )}
 
-        {view === "orders" && session && (
-          <section className="px-4 pt-3">
-            <h2 className="mb-2 text-[18px] font-bold">{t("guest.myOrders")}</h2>
-            {session.orders.map((o) => (
-              <div key={o.id} className="mb-3 rounded-[12px] border border-line p-3">
-                <p className="mb-1 text-[12px] text-muted">{t("pos.order", { no: o.orderNo })}</p>
-                {o.items.map((i) => (
-                  <div key={i.id} className="flex items-start gap-2 py-1 text-[14px]">
-                    <span className="font-semibold">×{i.quantity}</span>
-                    <span className="min-w-0 flex-1">
-                      {pickSnapshotName(i.nameJa, i.nameEn, locale)}
-                      {i.note && <span className="block text-[12px] text-muted">{i.note}</span>}
-                    </span>
-                    <span className="text-[12px] font-semibold text-brand">
-                      {t(`kitchenStatus.${i.kitchenStatus ?? "queued"}`)}
-                    </span>
-                  </div>
+          {joined && (
+            <div className="px-4 pt-4 sm:px-6">
+              <div
+                role="tablist"
+                aria-label={tc("dineIn.views")}
+                className="grid grid-cols-2 gap-1 rounded-[18px] bg-chip p-1"
+              >
+                {(["menu", "table"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    role="tab"
+                    aria-selected={view === v}
+                    onClick={() => setView(v)}
+                    className={`flex h-11 items-center justify-center gap-1.5 rounded-[14px] text-[14px] font-bold transition-[background-color,box-shadow,color] ${view === v ? "bg-white text-ink shadow-sm shadow-ink/10 ring-1 ring-line-soft" : "text-ink-2 hover:bg-white/60"}`}
+                  >
+                    {v === "menu" ? tc("dineIn.menuTab") : tc("dineIn.tableTabLabel")}
+                    {v === "table" && orders.length > 0 && (
+                      <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-ink px-1.5 text-[11px] text-white tabular-nums">
+                        {orders.length}
+                      </span>
+                    )}
+                  </button>
                 ))}
               </div>
-            ))}
-            {canOrder && (
-              <button
-                type="button"
-                onClick={() => setView("menu")}
-                className="h-12 w-full rounded-[12px] bg-ink text-[15px] font-semibold text-white"
-              >
-                {t("guest.orderMore")}
-              </button>
-            )}
-          </section>
-        )}
-      </main>
+            </div>
+          )}
 
-      {canOrder && view === "menu" && count > 0 && (
-        <div className="fixed inset-x-0 bottom-0 mx-auto max-w-[480px] p-4">
-          <button
-            type="button"
-            onClick={() => setView("cart")}
-            className="flex h-14 w-full items-center justify-between rounded-[14px] bg-ink px-5 text-[16px] font-semibold text-white"
-          >
-            <span>{t("guest.viewOrder", { count })}</span>
-            <span>{formatYen(total, locale)}</span>
-          </button>
-        </div>
+          {view === "menu" || !session ? (
+            <MenuBrowser
+              menu={table.menu}
+              canOrder={canOrder}
+              quantityOf={cart.quantityOf}
+              onOpen={setOpenItem}
+              onQuickAdd={(i) => cart.add(i, 1, "")}
+            />
+          ) : (
+            <TableView
+              session={session}
+              orders={orders}
+              canOrder={canOrder}
+              onOrderMore={() => {
+                setView("menu");
+                setMessage(null);
+              }}
+            />
+          )}
+        </main>
+
+        <aside className="hidden lg:block" aria-label={t("guest.yourOrder")}>
+          <div className="sticky top-[calc(var(--header-h)+24px)] max-h-[calc(100dvh-var(--header-h)-48px)] overflow-y-auto rounded-[24px] bg-white shadow-sm shadow-ink/5 ring-1 ring-line-soft">
+            <h2 className="px-5 pt-5 pb-1 text-[18px] font-bold">{t("guest.yourOrder")}</h2>
+            {canOrder || cart.lines.length > 0 ? (
+              cartPanel
+            ) : (
+              <p className="px-5 pt-1 pb-5 text-[14px] text-muted">{orderHint}</p>
+            )}
+          </div>
+        </aside>
+      </div>
+
+      {view === "menu" && cart.lines.length > 0 && !cartOpen && (
+        <CartBar
+          count={cart.count}
+          subtotal={cart.subtotal}
+          label={tc("viewOrder")}
+          onOpen={() => setCartOpen(true)}
+        />
+      )}
+      {cartOpen && (
+        <Sheet
+          title={t("guest.yourOrder")}
+          closeLabel={t("common.close")}
+          onClose={() => setCartOpen(false)}
+        >
+          {cartPanel}
+        </Sheet>
+      )}
+      {openItem && (
+        <ItemSheet
+          item={openItem}
+          canOrder={canOrder}
+          orderHint={orderHint}
+          priceNote={tc("taxIncluded")}
+          onClose={() => setOpenItem(null)}
+          onAdd={(q, note) => {
+            cart.add(openItem, q, note);
+            setOpenItem(null);
+          }}
+        />
       )}
     </div>
+  );
+}
+
+const STATUS_TONE = {
+  queued: "outline",
+  preparing: "brand",
+  ready: "ok",
+  served: "neutral",
+} as const;
+
+/** "Your table": this dining session's orders, each dish's kitchen status, and the running bill. */
+function TableView({
+  session,
+  orders,
+  canOrder,
+  onOrderMore,
+}: {
+  session: GuestSessionResponse;
+  orders: GuestSessionResponse["orders"];
+  canOrder: boolean;
+  onOrderMore: () => void;
+}) {
+  const t = useTranslations();
+  const tc = useTranslations("customer");
+  const locale = useLocale();
+  const sessionTone =
+    session.sessionStatus === "open"
+      ? "ok"
+      : session.sessionStatus === "bill_requested"
+        ? "brand"
+        : "neutral";
+  return (
+    <section className="rp-fade px-4 pt-6 sm:px-6" aria-labelledby="your-table">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 id="your-table" className="text-[22px] font-bold tracking-tight">
+          {t("guest.table", { name: session.table.name })}
+        </h2>
+        <StatusPill tone={sessionTone} dot>
+          {tc(`dineIn.session_${session.sessionStatus}`)}
+        </StatusPill>
+      </div>
+
+      {orders.length === 0 ? (
+        <EmptyState
+          icon={<Icon.Note className="size-6" />}
+          title={tc("dineIn.noOrders")}
+          hint={tc("dineIn.noOrdersHint")}
+        />
+      ) : (
+        <ol className="mt-4 space-y-3">
+          {[...orders].reverse().map((o) => {
+            const statuses = o.items.map((i) => i.kitchenStatus ?? "queued");
+            // The order is only as far along as its least advanced dish.
+            const stage = Math.min(...statuses.map((s) => Math.max(0, STAGES.indexOf(s))));
+            const served = o.items.filter((i) => i.kitchenStatus === "served").length;
+            const stageKey = STAGES[stage] ?? "queued";
+            return (
+              <li
+                key={o.id}
+                className="overflow-hidden rounded-[20px] bg-white shadow-sm shadow-ink/5 ring-1 ring-line-soft"
+              >
+                <div className="px-4 pt-4 pb-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-[16px] font-bold">
+                      {tc("dineIn.orderNo", { no: o.orderNo })}
+                    </h3>
+                    <span className="text-[12px] font-semibold text-muted">
+                      {tc("dineIn.servedCount", { served, total: o.items.length })}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex gap-1" aria-hidden>
+                    {STAGES.map((s, i) => (
+                      <span
+                        key={s}
+                        className={`h-1.5 flex-1 rounded-full transition-colors ${i <= stage ? "bg-brand" : "bg-line"}`}
+                      />
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[13px] font-semibold text-ink-2">
+                    {tc("dineIn.orderStage", { stage: tc(`itemStatus.${stageKey}`) })}
+                  </p>
+                </div>
+                <ul className="divide-y divide-line-soft border-t border-line-soft px-4">
+                  {o.items.map((i) => {
+                    const st = i.kitchenStatus ?? "queued";
+                    const tone = st === "voided" ? "neutral" : STATUS_TONE[st];
+                    return (
+                      <li key={i.id} className="flex items-start gap-3 py-3">
+                        <span className="mt-px w-7 shrink-0 text-[14px] font-bold text-muted tabular-nums">
+                          ×{i.quantity}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[15px] leading-snug font-semibold break-words [word-break:auto-phrase]">
+                            {pickSnapshotName(i.nameJa, i.nameEn, locale)}
+                          </span>
+                          {i.note && (
+                            <span className="mt-1 flex items-start gap-1 text-[12px] break-words text-muted">
+                              <Icon.Note className="mt-px size-3.5 shrink-0" />
+                              {i.note}
+                            </span>
+                          )}
+                        </span>
+                        <StatusPill tone={tone}>
+                          {tc(`itemStatus.${st === "voided" ? "queued" : st}`)}
+                        </StatusPill>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+
+      {orders.length > 0 && (
+        <div className="mt-4 rounded-[20px] bg-panel px-4 py-4 ring-1 ring-line-soft">
+          <h3 className="text-[15px] font-bold">{tc("dineIn.bill")}</h3>
+          <dl className="mt-2 space-y-1 text-[14px]">
+            {session.bill.taxBreakdown.map((x) => (
+              <div key={x.rateBp} className="flex justify-between text-muted">
+                <dt>
+                  {session.bill.pricesIncludeTax
+                    ? t("shop.taxIncluded", { rate: ratePercent(x.rateBp) })
+                    : t("shop.tax", { rate: ratePercent(x.rateBp) })}
+                </dt>
+                <dd className="tabular-nums">{formatYen(x.taxYen, locale)}</dd>
+              </div>
+            ))}
+            <div className="flex items-baseline justify-between border-t border-line pt-2">
+              <dt className="font-bold">{t("guest.total")}</dt>
+              <dd className="text-[24px] font-bold tabular-nums">
+                {formatYen(session.bill.totalYen, locale)}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-2 text-[12px] text-muted">{tc("dineIn.payAtRegister")}</p>
+        </div>
+      )}
+
+      {canOrder && (
+        <button
+          type="button"
+          onClick={onOrderMore}
+          className="mt-5 flex h-14 w-full items-center justify-center gap-2 rounded-[16px] bg-ink text-[16px] font-bold text-white transition-transform active:scale-[0.98]"
+        >
+          <Icon.Plus className="size-5" />
+          {t("guest.orderMore")}
+        </button>
+      )}
+    </section>
   );
 }

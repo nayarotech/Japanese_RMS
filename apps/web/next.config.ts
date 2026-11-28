@@ -20,7 +20,12 @@ const config: NextConfig = {
   // Do not let the framework write files into the repository at dev time.
   agentRules: false,
   reactStrictMode: true,
-  env: { NEXT_PUBLIC_SOCKET_URL: process.env.NEXT_PUBLIC_SOCKET_URL ?? "" },
+  env: {
+    NEXT_PUBLIC_SOCKET_URL: process.env.NEXT_PUBLIC_SOCKET_URL ?? "",
+    // Delivery-area map tiles (Leaflet). Empty = OpenStreetMap's public tiles, fine for low staff-only traffic.
+    NEXT_PUBLIC_MAP_TILE_URL: process.env.NEXT_PUBLIC_MAP_TILE_URL ?? "",
+    NEXT_PUBLIC_MAP_ATTRIBUTION: process.env.NEXT_PUBLIC_MAP_ATTRIBUTION ?? "",
+  },
   // Same-origin contract: the browser calls /api/* on the web origin; Next forwards to the private API.
   // In production the load balancer performs this routing (docs/architecture/01-high-level.md).
   rewrites() {

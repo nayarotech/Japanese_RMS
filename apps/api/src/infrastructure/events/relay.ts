@@ -71,6 +71,7 @@ export function routeEvent(row: OutboxRow): Delivery[] {
       return [{ rooms: [assigned ? rooms.user(t, assigned) : floor], payload: p }];
     }
     case "waiter.food.served":
+    case "waiter.food.picked_up":
       return [{ rooms: [floor, kitchen, staff], payload: p }];
     case "online.order.created": // the customer placed it; staff need to accept it
       return onlineStaff;

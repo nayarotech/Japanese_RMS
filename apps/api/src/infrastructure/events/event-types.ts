@@ -79,6 +79,11 @@ export type DomainEvent =
       payload: { ticketId: string; tableSessionId: string; kitchenItemIds: string[] };
     }
   | {
+      /** A waiter took ready food from the kitchen pass (items stay `ready` until served). */
+      type: "waiter.food.picked_up";
+      payload: { ticketId: string; tableSessionId: string; kitchenItemIds: string[] };
+    }
+  | {
       type: "checkout.completed";
       payload: { tableSessionId: string; tableId: string; paymentId: string; receiptId: string };
     }

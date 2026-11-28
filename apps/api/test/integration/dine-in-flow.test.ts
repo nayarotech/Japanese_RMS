@@ -133,16 +133,15 @@ describe("dine-in workflow (Basic package)", () => {
   it("10-11. kitchen receives a ticket with item-level notes and can mark items PARTIALLY ready", async () => {
     const res = await kitchen.get("/kitchen/tickets");
     const ticket = res.body.tickets.find((t: { orderId: string }) => t.orderId === firstOrderId);
-    expect(ticket).toMatchObject({ tableName: "A-3", status: "new", source: "TABLE_QR" });
+    // The kitchen starts as soon as the order arrives (no separate "new" step).
+    expect(ticket).toMatchObject({ tableName: "A-3", status: "preparing", source: "TABLE_QR" });
     expect(ticket.items.map((i: { note: string }) => i.note).sort()).toEqual([
       "Extra noodles",
       "Less spicy",
       "No sugar",
     ]);
 
-    const start = await kitchen.post(`/kitchen/tickets/${ticket.id}/start`);
-    expect(start.status).toBe(200);
-    expect(start.body.ticket.status).toBe("preparing");
+    expect(ticket.items.every((i: { status: string }) => i.status === "preparing")).toBe(true);
 
     // Only the "Less spicy" ramen is ready: the ticket must NOT become ready.
     const lessSpicy = ticket.items.find((i: { note: string }) => i.note === "Less spicy");
@@ -153,8 +152,8 @@ describe("dine-in workflow (Basic package)", () => {
       "ready",
     );
 
-    // Invalid transitions are rejected by the backend.
-    const again = await kitchen.post(`/kitchen/items/${lessSpicy.id}/start`);
+    // Invalid transitions are rejected by the backend (a ready item cannot be marked ready again).
+    const again = await kitchen.post(`/kitchen/items/${lessSpicy.id}/ready`);
     expect(again.status).toBe(409);
     expect(again.body.error.code).toBe("invalid_kitchen_transition");
   });
@@ -206,7 +205,10 @@ describe("dine-in workflow (Basic package)", () => {
     const open = (await kitchen.get("/kitchen/tickets")).body.tickets.filter(
       (t: { tableSessionId: string }) => t.tableSessionId === sessionId,
     );
-    expect(open.map((t: { status: string }) => t.status).sort()).toEqual(["new", "new"]);
+    expect(open.map((t: { status: string }) => t.status).sort()).toEqual([
+      "preparing",
+      "preparing",
+    ]);
   });
 
   it("16. cashier sees the combined bill across all submissions", async () => {

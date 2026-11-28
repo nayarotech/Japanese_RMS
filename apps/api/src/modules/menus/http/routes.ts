@@ -7,7 +7,7 @@ import { recordAudit } from "../../audit/index.js";
 import { requirePermission } from "../../authorization/index.js";
 import { requireFeature } from "../../entitlements/index.js";
 import { staff } from "../../identity/http/middleware.js";
-import { listTaxRates } from "../../restaurants/index.js";
+import { ensureTaxRate, listTaxRates } from "../../restaurants/index.js";
 import {
   createCategory,
   createMenuItem,
@@ -51,6 +51,29 @@ export function menuRoutes(deps: AppDeps): Router {
       taxRates: await listTaxRates(tx, ctx.locationId),
     }));
     res.json(data);
+  });
+
+  // Find-or-create a tax rate by value (basis points: 1000 = 10%), for manually entered percentages.
+  r.post("/menu/tax-rates", async (req, res) => {
+    const ctx = staff(req);
+    requirePermission(ctx, "menu.manage");
+    const { rateBp } = parse(z.strictObject({ rateBp: z.int().min(0).max(10_000) }), req.body);
+    const rate = await withTenantTransaction(deps.db, ctx, async (tx) => {
+      await requireFeature(tx, ctx.locationId, "dine_in_pos");
+      const r = await ensureTaxRate(tx, ctx.tenantId, ctx.locationId, rateBp);
+      if (r.created) {
+        await recordAudit(tx, ctx, {
+          action: "menu.tax_rate.created",
+          targetType: "tax_rate",
+          targetId: r.id,
+          metadata: { rateBp },
+        });
+      }
+      return r;
+    });
+    res
+      .status(rate.created ? 201 : 200)
+      .json({ id: rate.id, code: rate.code, rateBp: rate.rateBp });
   });
 
   r.patch("/menu/items/:id/availability", async (req, res) => {

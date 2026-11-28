@@ -11,8 +11,9 @@ import { recordAudit } from "../audit/index.js";
 import { getTenantBrand } from "../branding/index.js";
 import { hasFeature, requireFeature } from "../entitlements/index.js";
 import { getMenu } from "../menus/index.js";
-import { type OrderLineInput, listSessionOrders, placeOrder } from "../orders/index.js";
+import { type OrderLineInput, getBill, listSessionOrders, placeOrder } from "../orders/index.js";
 import { getLocationSettings } from "../restaurants/index.js";
+import { getStorefrontProfile } from "../storefront/index.js";
 import {
   findActiveSessionForTable,
   getTableName,
@@ -27,18 +28,26 @@ export async function getPublicTable(deps: AppDeps, token: string, guest: GuestC
   const ref = await resolveQrToken(deps.db, token);
   if (!ref) throw Errors.notFound("table");
   return withTenantTransaction(deps.db, { tenantId: ref.tenantId }, async (tx) => {
-    const [location, brand, tableName, active, entitled] = await Promise.all([
+    const [location, brand, tableName, active, entitled, profile] = await Promise.all([
       getLocationSettings(tx, ref.locationId),
       getTenantBrand(tx, ref.tenantId),
       getTableName(tx, ref.tableId),
       findActiveSessionForTable(tx, ref.tableId),
       hasFeature(tx, ref.locationId, "table_qr_ordering"),
+      getStorefrontProfile(tx, ref.locationId, deps.storage),
     ]);
     const menu = await getMenu(tx, ref.locationId, { publicView: true, storage: deps.storage });
     const joined = guest !== null && active !== null && guest.tableSessionId === active.id;
     return {
       brand,
       location: { name: location.name },
+      // Restaurant presentation only (name, logo, accent, announcement); no contact data is needed at the table.
+      profile: {
+        displayName: profile.displayName,
+        logo: profile.logo,
+        accentColor: profile.accentColor,
+        announcement: profile.announcement,
+      },
       table: { name: tableName },
       orderingEnabled: entitled && location.qrOrderingEnabled,
       sessionState: active ? active.status : "none",
@@ -113,10 +122,21 @@ export async function getGuestSessionView(deps: AppDeps, guest: GuestContext) {
       .select(["s.status", "t.name"])
       .where("s.id", "=", guest.tableSessionId)
       .executeTakeFirstOrThrow();
-    const orders = await listSessionOrders(tx, guest.tableSessionId);
+    const [orders, bill] = await Promise.all([
+      listSessionOrders(tx, guest.tableSessionId),
+      getBill(tx, guest.locationId, guest.tableSessionId),
+    ]);
     return {
       table: { name: s.name },
       sessionStatus: s.status,
+      // Running bill of THIS dining session only (the guest credential is bound to it). Paid at the register.
+      bill: {
+        subtotalYen: bill.subtotalYen,
+        taxBreakdown: bill.taxBreakdown,
+        taxTotalYen: bill.taxTotalYen,
+        totalYen: bill.totalYen,
+        pricesIncludeTax: bill.pricesIncludeTax,
+      },
       orders: orders.map((o) => ({
         id: o.id,
         orderNo: o.orderNo,

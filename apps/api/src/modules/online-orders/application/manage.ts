@@ -180,7 +180,8 @@ export async function acceptOnlineOrder(tx: Tx, ctx: StaffContext, id: string) {
     targetId: row.id,
     metadata: { ticketId },
   });
-  return next;
+  // The kitchen starts on receipt (the ticket is created in `preparing`), so the order is preparing right away.
+  return transition(tx, next, "start_preparing", staffActor(ctx));
 }
 
 function reasonText(code: string, note: string | null | undefined): string {

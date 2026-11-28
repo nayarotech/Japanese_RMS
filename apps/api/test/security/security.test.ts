@@ -49,7 +49,7 @@ describe("cross-tenant isolation over HTTP (tenant B owner attacking tenant A id
     ["GET", () => `/sessions/${aSessionId}/bill`, {}],
     ["POST", () => `/tables/${A.tables[1]!.id}/sessions`, { guestCount: 1 }],
     ["POST", () => `/sessions/${aSessionId}/request-bill`, {}],
-    ["POST", () => `/kitchen/items/${aKitchenItemId}/start`, {}],
+    ["POST", () => `/kitchen/items/${aKitchenItemId}/ready`, {}],
     ["POST", () => `/floor/items/${aKitchenItemId}/serve`, {}],
     ["POST", () => `/order-items/${aOrderItemId}/void`, { reason: "attack" }],
     ["GET", () => `/tables/${A.tables[0]!.id}/qr`, {}],
@@ -173,7 +173,7 @@ describe("staff permission enforcement (backend, per role)", () => {
       (await aWaiter.patch(`/menu/items/${A.menu[0]!.id}/availability`, { isAvailable: false }))
         .status,
     ).toBe(403);
-    expect((await aCashier.post(`/kitchen/items/${aKitchenItemId}/start`)).status).toBe(403);
+    expect((await aCashier.post(`/kitchen/items/${aKitchenItemId}/ready`)).status).toBe(403);
     expect((await aCashier.post(`/floor/items/${aKitchenItemId}/serve`)).status).toBe(403);
   });
   it("unauthenticated and guest credentials cannot reach staff endpoints", async () => {

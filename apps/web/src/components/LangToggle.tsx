@@ -3,7 +3,13 @@ import { useLocale, useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 
 /** 日本語 / EN pill from the Figma header. Stores the choice in a cookie and re-renders server messages. */
-export function LangToggle({ dark = false }: { dark?: boolean }) {
+export function LangToggle({
+  dark = false,
+  compact = false,
+}: {
+  dark?: boolean;
+  compact?: boolean;
+}) {
   const locale = useLocale();
   const t = useTranslations("lang");
   const router = useRouter();
@@ -18,7 +24,7 @@ export function LangToggle({ dark = false }: { dark?: boolean }) {
     <div
       role="group"
       aria-label={t("label")}
-      className={`flex h-[42px] items-center rounded-full p-[3px] ${base}`}
+      className={`flex items-center rounded-full p-[3px] ${compact ? "h-10" : "h-[42px]"} ${base}`}
     >
       {(["ja", "en"] as const).map((l) => (
         <button
@@ -26,7 +32,7 @@ export function LangToggle({ dark = false }: { dark?: boolean }) {
           type="button"
           aria-pressed={locale === l}
           onClick={() => set(l)}
-          className={`h-9 rounded-full px-4 text-[13px] font-bold whitespace-nowrap ${locale === l ? active : idle}`}
+          className={`rounded-full font-bold whitespace-nowrap transition-colors ${compact ? "h-[34px] px-3 text-[12px]" : "h-9 px-4 text-[13px]"} ${locale === l ? active : idle}`}
         >
           {t(l)}
         </button>

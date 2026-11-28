@@ -55,14 +55,13 @@ async function onlineRow(id: string) {
   );
 }
 
-/** Accept, then let the kitchen start and finish the whole ticket. */
+/** Accept (the kitchen starts on receipt), then let the kitchen finish the whole ticket. */
 async function acceptAndCook(id: string) {
   expect((await cashier.post(`/online-orders/${id}/accept`)).status).toBe(200);
   const detail = (await cashier.get(`/online-orders/${id}`)).body;
   const kt = (await kitchen.get("/kitchen/tickets")).body.tickets.find(
     (t: { orderId: string }) => t.orderId === detail.orderId,
   );
-  expect((await kitchen.post(`/kitchen/tickets/${kt.id}/start`)).status).toBe(200);
   expect((await kitchen.post(`/kitchen/tickets/${kt.id}/ready`)).status).toBe(200);
   return kt.id as string;
 }
@@ -689,7 +688,8 @@ describe("kitchen integration and pickup completion", () => {
       { menuItemId: BEER().id, quantity: 1 },
     ]);
     const id = placed.onlineOrderId;
-    expect((await cashier.post(`/online-orders/${id}/accept`)).body.status).toBe("accepted");
+    // Accepting sends the order to the kitchen, which starts immediately: the order is preparing.
+    expect((await cashier.post(`/online-orders/${id}/accept`)).body.status).toBe("preparing");
     const detail = (await cashier.get(`/online-orders/${id}`)).body;
     const ticket = (await kitchen.get("/kitchen/tickets")).body.tickets.find(
       (t: { orderId: string }) => t.orderId === detail.orderId,
@@ -699,14 +699,12 @@ describe("kitchen integration and pickup completion", () => {
       orderNo: placed.orderNo,
       tableName: null,
       tableSessionId: null,
-      status: "new",
+      status: "preparing",
       dueAt: placed.scheduledFor,
     });
-    await kitchen.post(`/kitchen/items/${ticket.items[0].id}/start`);
     expect((await onlineRow(id)).status).toBe("preparing");
     await kitchen.post(`/kitchen/items/${ticket.items[0].id}/ready`);
     expect((await onlineRow(id)).status).toBe("preparing"); // partial readiness never marks the order ready
-    await kitchen.post(`/kitchen/tickets/${ticket.id}/start`);
     await kitchen.post(`/kitchen/tickets/${ticket.id}/ready`);
     expect((await onlineRow(id)).status).toBe("ready");
     // Online food is handed over by the online workflow, not "served" at a table.
@@ -918,8 +916,12 @@ describe("cancellation rules", () => {
     const late = await shop.cancel(b.trackingToken);
     expect(late.status).toBe(409);
     expect(late.body.error.code).toBe("invalid_online_order_transition");
-    // Accepted but not started: the cashier may cancel; the kitchen ticket is voided.
-    const ok = await cashier.post(`/online-orders/${b.onlineOrderId}/cancel`, {
+    // Accepted = the kitchen has started: a cashier may not cancel; a manager can, and the ticket is voided.
+    const byCashierEarly = await cashier.post(`/online-orders/${b.onlineOrderId}/cancel`, {
+      reason: "customer_request",
+    });
+    expect(byCashierEarly.status).toBe(403);
+    const ok = await manager.post(`/online-orders/${b.onlineOrderId}/cancel`, {
       reason: "customer_request",
     });
     expect(ok.body.status).toBe("cancelled");
